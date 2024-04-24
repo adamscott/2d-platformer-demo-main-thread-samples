@@ -5229,6 +5229,26 @@ function dbg(...args) {
   }
   }
 
+  var MAX_INT53 = 9007199254740992;
+  
+  var MIN_INT53 = -9007199254740992;
+  var bigintToI53Checked = (num) => (num < MIN_INT53 || num > MAX_INT53) ? NaN : Number(num);
+  function ___syscall_ftruncate64(fd, length) {
+    length = bigintToI53Checked(length);
+  
+    
+  try {
+  
+      if (isNaN(length)) return 61;
+      FS.ftruncate(fd, length);
+      return 0;
+    } catch (e) {
+    if (typeof FS == 'undefined' || !(e.name === 'ErrnoError')) throw e;
+    return -e.errno;
+  }
+  ;
+  }
+
   
   var stringToUTF8 = (str, outPtr, maxBytesToWrite) => {
       assert(typeof maxBytesToWrite == 'number', 'stringToUTF8(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!');
@@ -5733,10 +5753,6 @@ function dbg(...args) {
       throw Infinity;
     };
 
-  var MAX_INT53 = 9007199254740992;
-  
-  var MIN_INT53 = -9007199254740992;
-  var bigintToI53Checked = (num) => (num < MIN_INT53 || num > MAX_INT53) ? NaN : Number(num);
   function __gmtime_js(time, tmPtr) {
     time = bigintToI53Checked(time);
   
@@ -13496,6 +13512,8 @@ var wasmImports = {
   __syscall_fcntl64: ___syscall_fcntl64,
   /** @export */
   __syscall_fstat64: ___syscall_fstat64,
+  /** @export */
+  __syscall_ftruncate64: ___syscall_ftruncate64,
   /** @export */
   __syscall_getcwd: ___syscall_getcwd,
   /** @export */
