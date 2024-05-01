@@ -1,16 +1,15 @@
 
 var Godot = (() => {
-  var _scriptName = typeof document != 'undefined' ? document.currentScript?.src : undefined;
+  var _scriptDir = typeof document !== 'undefined' && document.currentScript ? document.currentScript.src : undefined;
   
   return (
 function(moduleArg = {}) {
-  var moduleRtn;
 
 // include: shell.js
 // The Module object: Our interface to the outside world. We import
 // and export values on it. There are various ways Module can be used:
 // 1. Not defined. We create it here
-// 2. A function parameter, function(moduleArg) => Promise<Module>
+// 2. A function parameter, function(Module) { ..generated code.. }
 // 3. pre-run appended it, var Module = {}; ..generated code..
 // 4. External script tag defines var Module.
 // We need to check if Module already exists (e.g. case 3 above).
@@ -20,37 +19,22 @@ function(moduleArg = {}) {
 // after the generated code, you will need to define   var Module = {};
 // before the code. Then that object will be used in the code, and you
 // can continue to use Module afterwards as well.
-var Module = Object.assign({}, moduleArg);
+var Module = moduleArg;
 
 // Set up the promise that indicates the Module is initialized
 var readyPromiseResolve, readyPromiseReject;
-var readyPromise = new Promise((resolve, reject) => {
+Module['ready'] = new Promise((resolve, reject) => {
   readyPromiseResolve = resolve;
   readyPromiseReject = reject;
 });
 ["_memory","___indirect_function_table","__Z14godot_web_mainiPPc","__emwebxr_on_input_event","__emwebxr_on_simple_event","_main","onRuntimeInitialized"].forEach((prop) => {
-  if (!Object.getOwnPropertyDescriptor(readyPromise, prop)) {
-    Object.defineProperty(readyPromise, prop, {
+  if (!Object.getOwnPropertyDescriptor(Module['ready'], prop)) {
+    Object.defineProperty(Module['ready'], prop, {
       get: () => abort('You are getting ' + prop + ' on the Promise object, instead of the instance. Use .then() to get called back with the instance, see the MODULARIZE docs in src/settings.js'),
       set: () => abort('You are setting ' + prop + ' on the Promise object, instead of the instance. Use .then() to get called back with the instance, see the MODULARIZE docs in src/settings.js'),
     });
   }
 });
-
-// Determine the runtime environment we are in. You can customize this by
-// setting the ENVIRONMENT setting at compile time (see settings.js).
-
-// Attempt to auto-detect the environment
-var ENVIRONMENT_IS_WEB = typeof window == 'object';
-var ENVIRONMENT_IS_WORKER = typeof importScripts == 'function';
-// N.b. Electron.js environment is simultaneously a NODE-environment, but
-// also a web environment.
-var ENVIRONMENT_IS_NODE = typeof process == 'object' && typeof process.versions == 'object' && typeof process.versions.node == 'string';
-var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
-
-if (Module['ENVIRONMENT']) {
-  throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -sENVIRONMENT=web or -sENVIRONMENT=node)');
-}
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
@@ -68,6 +52,21 @@ var thisProgram = './this.program';
 var quit_ = (status, toThrow) => {
   throw toThrow;
 };
+
+// Determine the runtime environment we are in. You can customize this by
+// setting the ENVIRONMENT setting at compile time (see settings.js).
+
+// Attempt to auto-detect the environment
+var ENVIRONMENT_IS_WEB = typeof window == 'object';
+var ENVIRONMENT_IS_WORKER = typeof importScripts == 'function';
+// N.b. Electron.js environment is simultaneously a NODE-environment, but
+// also a web environment.
+var ENVIRONMENT_IS_NODE = typeof process == 'object' && typeof process.versions == 'object' && typeof process.versions.node == 'string';
+var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
+
+if (Module['ENVIRONMENT']) {
+  throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -sENVIRONMENT=web or -sENVIRONMENT=node)');
+}
 
 // `/` should be present at the end if `scriptDirectory` is not empty
 var scriptDirectory = '';
@@ -87,6 +86,70 @@ if (ENVIRONMENT_IS_SHELL) {
 
   if ((typeof process == 'object' && typeof require === 'function') || typeof window == 'object' || typeof importScripts == 'function') throw new Error('not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)');
 
+  if (typeof read != 'undefined') {
+    read_ = read;
+  }
+
+  readBinary = (f) => {
+    if (typeof readbuffer == 'function') {
+      return new Uint8Array(readbuffer(f));
+    }
+    let data = read(f, 'binary');
+    assert(typeof data == 'object');
+    return data;
+  };
+
+  readAsync = (f, onload, onerror) => {
+    setTimeout(() => onload(readBinary(f)));
+  };
+
+  if (typeof clearTimeout == 'undefined') {
+    globalThis.clearTimeout = (id) => {};
+  }
+
+  if (typeof setTimeout == 'undefined') {
+    // spidermonkey lacks setTimeout but we use it above in readAsync.
+    globalThis.setTimeout = (f) => (typeof f == 'function') ? f() : abort();
+  }
+
+  if (typeof scriptArgs != 'undefined') {
+    arguments_ = scriptArgs;
+  } else if (typeof arguments != 'undefined') {
+    arguments_ = arguments;
+  }
+
+  if (typeof quit == 'function') {
+    quit_ = (status, toThrow) => {
+      // Unlike node which has process.exitCode, d8 has no such mechanism. So we
+      // have no way to set the exit code and then let the program exit with
+      // that code when it naturally stops running (say, when all setTimeouts
+      // have completed). For that reason, we must call `quit` - the only way to
+      // set the exit code - but quit also halts immediately.  To increase
+      // consistency with node (and the web) we schedule the actual quit call
+      // using a setTimeout to give the current stack and any exception handlers
+      // a chance to run.  This enables features such as addOnPostRun (which
+      // expected to be able to run code after main returns).
+      setTimeout(() => {
+        if (!(toThrow instanceof ExitStatus)) {
+          let toLog = toThrow;
+          if (toThrow && typeof toThrow == 'object' && toThrow.stack) {
+            toLog = [toThrow, toThrow.stack];
+          }
+          err(`exiting due to exception: ${toLog}`);
+        }
+        quit(status);
+      });
+      throw toThrow;
+    };
+  }
+
+  if (typeof print != 'undefined') {
+    // Prefer to use print/printErr where they exist, as they usually work better.
+    if (typeof console == 'undefined') console = /** @type{!Console} */({});
+    console.log = /** @type{!function(this:Console, ...*): undefined} */ (print);
+    console.warn = console.error = /** @type{!function(this:Console, ...*): undefined} */ (typeof printErr != 'undefined' ? printErr : print);
+  }
+
 } else
 
 // Note that this includes Node.js workers when relevant (pthreads is enabled).
@@ -100,8 +163,8 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   }
   // When MODULARIZE, this JS may be executed later, after document.currentScript
   // is gone, so we saved it, and we use it here instead of any other info.
-  if (_scriptName) {
-    scriptDirectory = _scriptName;
+  if (_scriptDir) {
+    scriptDirectory = _scriptDir;
   }
   // blob urls look like blob:http://site.com/etc/etc and we cannot infer anything from them.
   // otherwise, slice off the final part of the url to find the script directory.
@@ -117,6 +180,8 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
 
   if (!(typeof window == 'object' || typeof importScripts == 'function')) throw new Error('not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)');
 
+  // Differentiate the Web Worker from the Node Worker case, as reading must
+  // be done differently.
   {
 // include: web_or_worker_shell_read.js
 read_ = (url) => {
@@ -589,14 +654,12 @@ var isDataURI = (filename) => filename.startsWith(dataURIPrefix);
  */
 var isFileURI = (filename) => filename.startsWith('file://');
 // end include: URIUtils.js
-function createExportWrapper(name, nargs) {
+function createExportWrapper(name) {
   return (...args) => {
     assert(runtimeInitialized, `native function \`${name}\` called before runtime initialization`);
     assert(!runtimeExited, `native function \`${name}\` called after runtime exit (use NO_EXIT_RUNTIME to keep it alive after main() exits)`);
     var f = wasmExports[name];
     assert(f, `exported native function \`${name}\` not found`);
-    // Only assert for too many arguments. Too few can be valid since the missing arguments will be zero filled.
-    assert(args.length <= nargs, `native function \`${name}\` called with ${args.length} args but expects ${nargs}`);
     return f(...args);
   };
 }
@@ -604,7 +667,7 @@ function createExportWrapper(name, nargs) {
 // include: runtime_exceptions.js
 // end include: runtime_exceptions.js
 var wasmBinaryFile;
-  wasmBinaryFile = 'godot.web.template_debug.dev.wasm32.nothreads.wasm';
+  wasmBinaryFile = 'godot.web.template_release.dev.wasm32.nothreads.wasm';
   if (!isDataURI(wasmBinaryFile)) {
     wasmBinaryFile = locateFile(wasmBinaryFile);
   }
@@ -683,18 +746,14 @@ function instantiateAsync(binary, binaryFile, imports, callback) {
   return instantiateArrayBuffer(binaryFile, imports, callback);
 }
 
-function getWasmImports() {
-  // prepare imports
-  return {
-    'env': wasmImports,
-    'wasi_snapshot_preview1': wasmImports,
-  }
-}
-
 // Create the wasm instance.
 // Receives the wasm imports, returns the exports.
 function createWasm() {
-  var info = getWasmImports();
+  // prepare imports
+  var info = {
+    'env': wasmImports,
+    'wasi_snapshot_preview1': wasmImports,
+  };
   // Load the wasm module and create an instance of using native support in the JS engine.
   // handle a generated wasm instance, receiving its exports and
   // performing other necessary setup
@@ -743,6 +802,7 @@ function createWasm() {
   // Also pthreads and wasm workers initialize the wasm instance through this
   // path.
   if (Module['instantiateWasm']) {
+
     try {
       return Module['instantiateWasm'](info, receiveInstance);
     } catch(e) {
@@ -791,7 +851,7 @@ function isExportedByForceFilesystem(name) {
 }
 
 function missingGlobal(sym, msg) {
-  if (typeof globalThis != 'undefined') {
+  if (typeof globalThis !== 'undefined') {
     Object.defineProperty(globalThis, sym, {
       configurable: true,
       get() {
@@ -806,7 +866,7 @@ missingGlobal('buffer', 'Please use HEAP8.buffer or wasmMemory.buffer');
 missingGlobal('asm', 'Please use wasmExports instead');
 
 function missingLibrarySymbol(sym) {
-  if (typeof globalThis != 'undefined' && !Object.getOwnPropertyDescriptor(globalThis, sym)) {
+  if (typeof globalThis !== 'undefined' && !Object.getOwnPropertyDescriptor(globalThis, sym)) {
     Object.defineProperty(globalThis, sym, {
       configurable: true,
       get() {
@@ -923,10 +983,6 @@ function dbg(...args) {
       default: abort(`invalid type for setValue: ${type}`);
     }
   }
-
-  var stackRestore = (val) => __emscripten_stack_restore(val);
-
-  var stackSave = () => _emscripten_stack_get_current();
 
   var warnOnce = (text) => {
       warnOnce.shown ||= {};
@@ -4052,14 +4108,22 @@ function dbg(...args) {
         var buffer = HEAPU8.slice(addr, addr + len);
         FS.msync(stream, buffer, offset, len, flags);
       },
-  getStreamFromFD(fd) {
-        var stream = FS.getStreamChecked(fd);
-        return stream;
-      },
   varargs:undefined,
+  get() {
+        assert(SYSCALLS.varargs != undefined);
+        // the `+` prepended here is necessary to convince the JSCompiler that varargs is indeed a number.
+        var ret = HEAP32[((+SYSCALLS.varargs)>>2)];
+        SYSCALLS.varargs += 4;
+        return ret;
+      },
+  getp() { return SYSCALLS.get() },
   getStr(ptr) {
         var ret = UTF8ToString(ptr);
         return ret;
+      },
+  getStreamFromFD(fd) {
+        var stream = FS.getStreamChecked(fd);
+        return stream;
       },
   };
   function ___syscall__newselect(nfds, readfds, writefds, exceptfds, timeout) {
@@ -5161,17 +5225,6 @@ function dbg(...args) {
   }
   }
 
-  /** @suppress {duplicate } */
-  function syscallGetVarargI() {
-      assert(SYSCALLS.varargs != undefined);
-      // the `+` prepended here is necessary to convince the JSCompiler that varargs is indeed a number.
-      var ret = HEAP32[((+SYSCALLS.varargs)>>2)];
-      SYSCALLS.varargs += 4;
-      return ret;
-    }
-  var syscallGetVarargP = syscallGetVarargI;
-  
-  
   function ___syscall_fcntl64(fd, cmd, varargs) {
   SYSCALLS.varargs = varargs;
   try {
@@ -5179,7 +5232,7 @@ function dbg(...args) {
       var stream = SYSCALLS.getStreamFromFD(fd);
       switch (cmd) {
         case 0: {
-          var arg = syscallGetVarargI();
+          var arg = SYSCALLS.get();
           if (arg < 0) {
             return -28;
           }
@@ -5196,12 +5249,12 @@ function dbg(...args) {
         case 3:
           return stream.flags;
         case 4: {
-          var arg = syscallGetVarargI();
+          var arg = SYSCALLS.get();
           stream.flags |= arg;
           return 0;
         }
         case 12: {
-          var arg = syscallGetVarargP();
+          var arg = SYSCALLS.getp();
           var offset = 0;
           // We're always unlocked.
           HEAP16[(((arg)+(offset))>>1)] = 2;
@@ -5357,7 +5410,6 @@ function dbg(...args) {
   }
   }
 
-  
   function ___syscall_ioctl(fd, op, varargs) {
   SYSCALLS.varargs = varargs;
   try {
@@ -5372,7 +5424,7 @@ function dbg(...args) {
           if (!stream.tty) return -59;
           if (stream.tty.ops.ioctl_tcgets) {
             var termios = stream.tty.ops.ioctl_tcgets(stream);
-            var argp = syscallGetVarargP();
+            var argp = SYSCALLS.getp();
             HEAP32[((argp)>>2)] = termios.c_iflag || 0;
             HEAP32[(((argp)+(4))>>2)] = termios.c_oflag || 0;
             HEAP32[(((argp)+(8))>>2)] = termios.c_cflag || 0;
@@ -5395,7 +5447,7 @@ function dbg(...args) {
         case 21508: {
           if (!stream.tty) return -59;
           if (stream.tty.ops.ioctl_tcsets) {
-            var argp = syscallGetVarargP();
+            var argp = SYSCALLS.getp();
             var c_iflag = HEAP32[((argp)>>2)];
             var c_oflag = HEAP32[(((argp)+(4))>>2)];
             var c_cflag = HEAP32[(((argp)+(8))>>2)];
@@ -5410,7 +5462,7 @@ function dbg(...args) {
         }
         case 21519: {
           if (!stream.tty) return -59;
-          var argp = syscallGetVarargP();
+          var argp = SYSCALLS.getp();
           HEAP32[((argp)>>2)] = 0;
           return 0;
         }
@@ -5419,7 +5471,7 @@ function dbg(...args) {
           return -28; // not supported
         }
         case 21531: {
-          var argp = syscallGetVarargP();
+          var argp = SYSCALLS.getp();
           return FS.ioctl(stream, op, argp);
         }
         case 21523: {
@@ -5428,7 +5480,7 @@ function dbg(...args) {
           if (!stream.tty) return -59;
           if (stream.tty.ops.ioctl_tiocgwinsz) {
             var winsize = stream.tty.ops.ioctl_tiocgwinsz(stream.tty);
-            var argp = syscallGetVarargP();
+            var argp = SYSCALLS.getp();
             HEAP16[((argp)>>1)] = winsize[0];
             HEAP16[(((argp)+(2))>>1)] = winsize[1];
           }
@@ -5532,14 +5584,13 @@ function dbg(...args) {
   }
   }
 
-  
   function ___syscall_openat(dirfd, path, flags, varargs) {
   SYSCALLS.varargs = varargs;
   try {
   
       path = SYSCALLS.getStr(path);
       path = SYSCALLS.calculateAt(dirfd, path);
-      var mode = varargs ? syscallGetVarargI() : 0;
+      var mode = varargs ? SYSCALLS.get() : 0;
       return FS.open(path, flags, mode).fd;
     } catch (e) {
     if (typeof FS == 'undefined' || !(e.name === 'ErrnoError')) throw e;
@@ -5810,7 +5861,6 @@ function dbg(...args) {
     ;
   }
 
-  
   var __tzset_js = (timezone, daylight, std_name, dst_name) => {
       // TODO: Use (malleable) environment variables instead of system settings.
       var currentYear = new Date().getFullYear();
@@ -5836,20 +5886,19 @@ function dbg(...args) {
   
       HEAP32[((daylight)>>2)] = Number(winterOffset != summerOffset);
   
-      var extractZone = (date) => date.toLocaleTimeString(undefined, {hour12:false, timeZoneName:'short'}).split(' ')[1];
+      function extractZone(date) {
+        var match = date.toTimeString().match(/\(([A-Za-z ]+)\)$/);
+        return match ? match[1] : "GMT";
+      };
       var winterName = extractZone(winter);
       var summerName = extractZone(summer);
-      assert(winterName);
-      assert(summerName);
-      assert(lengthBytesUTF8(winterName) <= 16, `timezone name truncated to fit in TZNAME_MAX (${winterName})`);
-      assert(lengthBytesUTF8(summerName) <= 16, `timezone name truncated to fit in TZNAME_MAX (${summerName})`);
       if (summerOffset < winterOffset) {
         // Northern hemisphere
-        stringToUTF8(winterName, std_name, 17);
-        stringToUTF8(summerName, dst_name, 17);
+        stringToUTF8(winterName, std_name, 7);
+        stringToUTF8(summerName, dst_name, 7);
       } else {
-        stringToUTF8(winterName, dst_name, 17);
-        stringToUTF8(summerName, std_name, 17);
+        stringToUTF8(winterName, dst_name, 7);
+        stringToUTF8(summerName, std_name, 7);
       }
     };
 
@@ -7135,9 +7184,16 @@ function dbg(...args) {
             Browser.mouseMovementY = Browser.getMovementY(event);
           }
   
-          // add the mouse delta to the current absolute mouse position
-          Browser.mouseX += Browser.mouseMovementX;
-          Browser.mouseY += Browser.mouseMovementY;
+          // check if SDL is available
+          if (typeof SDL != "undefined") {
+            Browser.mouseX = SDL.mouseX + Browser.mouseMovementX;
+            Browser.mouseY = SDL.mouseY + Browser.mouseMovementY;
+          } else {
+            // just add the mouse delta to the current absolute mouse position
+            // FIXME: ideally this should be clamped against the canvas size and zero
+            Browser.mouseX += Browser.mouseMovementX;
+            Browser.mouseY += Browser.mouseMovementY;
+          }
         } else {
           if (event.type === 'touchstart' || event.type === 'touchend' || event.type === 'touchmove') {
             var touch = event.touch;
@@ -7335,6 +7391,13 @@ function dbg(...args) {
       return false;
     };
 
+  
+  var withStackSave = (f) => {
+      var stack = stackSave();
+      var ret = f();
+      stackRestore(stack);
+      return ret;
+    };
   var JSEvents = {
   removeAllEventListeners() {
         while (JSEvents.eventHandlers.length) {
@@ -7703,7 +7766,7 @@ function dbg(...args) {
         if (curr < 0) return -1;
         ret += curr;
         if (curr < len) break; // nothing more to read
-        if (typeof offset != 'undefined') {
+        if (typeof offset !== 'undefined') {
           offset += curr;
         }
       }
@@ -7753,7 +7816,7 @@ function dbg(...args) {
         var curr = FS.write(stream, HEAP8, ptr, len, offset);
         if (curr < 0) return -1;
         ret += curr;
-        if (typeof offset != 'undefined') {
+        if (typeof offset !== 'undefined') {
           offset += curr;
         }
       }
@@ -9055,7 +9118,7 @@ function dbg(...args) {
   
       if (count <= 288) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLIntBuffers[count];
+        var view = miniTempWebGLIntBuffers[count-1];
         for (var i = 0; i < count; ++i) {
           view[i] = HEAP32[(((value)+(4*i))>>2)];
         }
@@ -9091,7 +9154,7 @@ function dbg(...args) {
   
       if (count <= 144) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLFloatBuffers[2*count];
+        var view = miniTempWebGLFloatBuffers[2*count-1];
         for (var i = 0; i < 2*count; i += 2) {
           view[i] = HEAPF32[(((value)+(4*i))>>2)];
           view[i+1] = HEAPF32[(((value)+(4*i+4))>>2)];
@@ -9114,7 +9177,7 @@ function dbg(...args) {
   
       if (count <= 144) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLIntBuffers[2*count];
+        var view = miniTempWebGLIntBuffers[2*count-1];
         for (var i = 0; i < 2*count; i += 2) {
           view[i] = HEAP32[(((value)+(4*i))>>2)];
           view[i+1] = HEAP32[(((value)+(4*i+4))>>2)];
@@ -9137,7 +9200,7 @@ function dbg(...args) {
   
       if (count <= 96) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLFloatBuffers[3*count];
+        var view = miniTempWebGLFloatBuffers[3*count-1];
         for (var i = 0; i < 3*count; i += 3) {
           view[i] = HEAPF32[(((value)+(4*i))>>2)];
           view[i+1] = HEAPF32[(((value)+(4*i+4))>>2)];
@@ -9166,7 +9229,7 @@ function dbg(...args) {
   
       if (count <= 72) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLFloatBuffers[4*count];
+        var view = miniTempWebGLFloatBuffers[4*count-1];
         // hoist the heap out of the loop for size and for pthreads+growth.
         var heap = HEAPF32;
         value = ((value)>>2);
@@ -9201,7 +9264,7 @@ function dbg(...args) {
   
       if (count <= 32) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLFloatBuffers[9*count];
+        var view = miniTempWebGLFloatBuffers[9*count-1];
         for (var i = 0; i < 9*count; i += 9) {
           view[i] = HEAPF32[(((value)+(4*i))>>2)];
           view[i+1] = HEAPF32[(((value)+(4*i+4))>>2)];
@@ -9231,7 +9294,7 @@ function dbg(...args) {
   
       if (count <= 18) {
         // avoid allocation when uploading few enough uniforms
-        var view = miniTempWebGLFloatBuffers[16*count];
+        var view = miniTempWebGLFloatBuffers[16*count-1];
         // hoist the heap out of the loop for size and for pthreads+growth.
         var heap = HEAPF32;
         value = ((value)>>2);
@@ -9536,10 +9599,18 @@ function dbg(...args) {
   driver:null,
   interval:0,
   samples:null,
-  sampleNodesList:null,
+  sampleNodes:null,
+  buses:null,
+  linear_to_db:function (linear) {
+  			return Math.log(linear) * 8.6858896380650365530225783783321;
+  		},
+  db_to_linear:function (db) {
+  			return Math.exp(db * 0.11512925464970228420089957273422);
+  		},
   init:function (mix_rate, latency, onstatechange, onlatencyupdate) {
   			GodotAudio.samples = new Map();
-  			GodotAudio.sampleNodesList = new Map();
+  			GodotAudio.sampleNodes = new Map();
+  			GodotAudio.buses = [];
   
   			const opts = {};
   			// If mix_rate is 0, let the browser choose.
@@ -9652,6 +9723,7 @@ function dbg(...args) {
   			});
   		},
   start_sample:async function (playbackObjectId, streamObjectId, startOptions) {
+  			console.info(`start_sample(${playbackObjectId}, ${streamObjectId}, ${startOptions})`);
   			/** @type {AudioContext} */
   			const ctx = GodotAudio.ctx;
   
@@ -9661,75 +9733,253 @@ function dbg(...args) {
   				return;
   			}
   
+  			/** @type {Sample} */
   			const sample = GodotAudio.samples.get(streamObjectId);
-  			const sampleNodes = {
-  				/** @type {AudioBufferSourceNode} */
+  			/** @type {SampleNode} */
+  			const sampleNode = {
+  				id: playbackObjectId,
+  				streamObjectId: streamObjectId,
+  				startTime: ctx.currentTime,
+  				pauseTime: 0,
   				source: ctx.createBufferSource(),
-  				/** @type {GainNode} */
   				gain: ctx.createGain(),
-  				/** @type {StereoPannerNode | null} */
-  				stereoPanner: null,
+  				stereoPanner: ctx.createStereoPanner(),
   				startOptions,
+  				getOutputNode() {
+  					return this.stereoPanner;
+  				},
+  				clear() {
+  					console.log("clear sampleNode!", this.id);
+  					this.source.stop();
+  					this.source.disconnect();
+  					this.source = null;
+  					this.gain.disconnect();
+  					this.gain = null;
+  					this.stereoPanner.disconnect();
+  					this.stereoPanner = null;
+  				}
   			};
   
-  			sampleNodes.source.buffer = sample.audioBuffer;
+  			sampleNode.source.buffer = sample.audioBuffer;
+  			sampleNode.source.playbackRate = sample
   
-  			sampleNodes.gain.gain.value = startOptions.volumeDb + 1;
-  			sampleNodes.source.connect(sampleNodes.gain);
+  			sampleNode.source.connect(sampleNode.gain);
+  			sampleNode.gain.connect(sampleNode.stereoPanner);
+  			
+  			sampleNode.gain.gain.value = GodotAudio.db_to_linear(startOptions.volumeDb);
+  			sampleNode.source.loop = sample.loopMode !== 'disabled';
   
-  			/** @type {AudioNode} */
-  			let lastNode = sampleNodes.gain;
-  
-  			switch (startOptions.positionMode) {
-  			case '2D': {
-  				sampleNodes.stereoPanner = ctx.createStereoPanner();
-  				lastNode.connect(sampleNodes.stereoPanner);
-  				lastNode = sampleNodes.stereoPanner;
-  			} break;
-  
-  			case '3D': {
-  
-  			} break;
-  
-  			case 'none':
-  			default: {
-  				// Do nothing.
-  			}
-  			}
-  
-  			lastNode.connect(ctx.destination);
-  
-  			sampleNodes.source.loop = sample.loopMode !== 'disabled';
-  			sampleNodes.source.start(startOptions.offset);
-  
-  			sampleNodes.source.addEventListener('ended', () => {
+  			sampleNode.source.addEventListener('ended', () => {
   				GodotAudio.stop_sample(playbackObjectId);
   			});
   
-  			console.log(GodotAudio);
-  			GodotAudio.sampleNodesList.set(playbackObjectId, sampleNodes);
+  			sampleNode.currentBus = startOptions.busIndex;
+  			/** @type {Bus[]} */
+  			const buses = GodotAudio.buses;
+  			const bus = buses[startOptions.busIndex];
+  			sampleNode.getOutputNode().connect(bus.getInputNode());
+  
+  			sampleNode.source.start(startOptions.offset);
+  			GodotAudio.sampleNodes.set(playbackObjectId, sampleNode);
   		},
   stop_sample:function (playbackObjectId) {
-  			if (!GodotAudio.sampleNodesList.has(playbackObjectId)) {
+  			/** @type {Map<string, SampleNode>} */
+  			const sampleNodes = GodotAudio.sampleNodes;
+  			const sampleNode = sampleNodes.get(playbackObjectId);
+  			if (sampleNode == null) {
+  				// Fail silently, it's ok.
   				return;
   			}
+  			console.info(`stop_sample(${playbackObjectId})`);
+  			sampleNode.clear();
   
-  			const sampleNodes = GodotAudio.sampleNodesList.get(playbackObjectId);
-  			sampleNodes.source.stop();
-  
-  			GodotAudio.sampleNodesList.delete(playbackObjectId);
+  			GodotAudio.sampleNodes.delete(playbackObjectId);
   		},
-  update_sample:function (playbackObjectId, pan, volumeDb, pitchScale) {
-  			if (!GodotAudio.sampleNodesList.has(playbackObjectId)) {
+  sample_set_pause:function (playbackObjectId, pause) {
+  			console.log(`sample_set_pause(${playbackObjectId}, ${pause})`);
+  
+  			/** @type {AudioContext} */
+  			const ctx = GodotAudio.ctx;
+  			/** @type {Map<number, SampleNode>} */
+  			const sampleNodes = GodotAudio.sampleNodes;
+  			const sampleNode = sampleNodes.get(playbackObjectId);
+  			if (sampleNode == null) {
+  				console.error(`error while trying to update sample node: sample node not found "${playbackObjectId}"`);
   				return;
   			}
   
-  			const sampleNodes = GodotAudio.sampleNodesList.get(playbackObjectId);
-  			if (sampleNodes.stereoPanner == null) {
+  			if (pause) {
+  				sampleNode.pauseTime = (sampleNode.source.context.currentTime - sampleNode.startTime) / sampleNode.source.playbackRate.value;
+  				sampleNode.source.stop();
   				return;
   			}
   
-  			sampleNodes.stereoPanner.pan.value = pan;
+  			if (sampleNode.pauseTime === 0) {
+  				return;
+  			}
+  
+  			/** @type {Sample} */
+  			const sample = GodotAudio.samples.get(sampleNode.streamObjectId);
+  			const leftChannel = new Float32Array();
+  			sample.audioBuffer.copyFromChannel(leftChannel, 0, 0);
+  			const rightChannel = new Float32Array();
+  			sample.audioBuffer.copyFromChannel(rightChannel, 1, 0);
+  			const buffer = ctx.createBuffer(2, sampleNode.source.buffer.length, sampleNode.source.buffer.sampleRate);
+  			buffer.copyToChannel(leftChannel, 0, 0);
+  			buffer.copyToChannel(rightChannel, 1, 0);
+  			sampleNode.source.buffer = buffer;
+  			sampleNode.source.connect(sampleNode.gain);
+  			sampleNode.source.start(sampleNode.startOptions.offset + sampleNode.pauseTime);
+  		},
+  update_sample:function (playbackObjectId, busIndex, pan, volumeDb, pitchScale) {
+  			// console.info(`update_sample(${playbackObjectId}, ${pan}, ${volumeDb}, ${pitchScale})`);
+  			/** @type {Map<number, SampleNode>} */
+  			const sampleNodes = GodotAudio.sampleNodes;
+  			const sampleNode = sampleNodes.get(playbackObjectId);
+  			if (sampleNode == null) {
+  				console.error(`error while trying to update sample node: sample node not found "${playbackObjectId}"`);
+  				return;
+  			}
+  			if (sampleNode.currentBus != busIndex) {
+  				/** @type {Bus[]} */
+  				const buses = GodotAudio.buses;
+  				const newBus = buses[busIndex];
+  				sampleNode.currentBus = busIndex;
+  				sampleNode.getOutputNode().disconnect();
+  				sampleNode.getOutputNode().connect(newBus.getInputNode());
+  			}
+  			sampleNode.source.playbackRate = pitchScale;
+  			sampleNode.gain.gain.value = GodotAudio.db_to_linear(volumeDb);
+  			sampleNode.stereoPanner.pan.value = pan;
+  		},
+  create_sample_bus:function () {
+  			console.info(`create_sample_bus()`);
+  			/** @type {AudioContext} */
+  			const ctx = GodotAudio.ctx;
+  			/** @type {Bus} */
+  			const bus = {
+  				gain: ctx.createGain(),
+  				solo: ctx.createGain(),
+  				mute: ctx.createGain(),
+  				getInputNode() {
+  					return this.gain;
+  				},
+  				getOutputNode() {
+  					return this.mute;
+  				},
+  				clear() {
+  					this.gain.disconnect();
+  					this.gain = null;
+  					this.solo.disconnect();
+  					this.solo = null;
+  					this.mute.disconnect();
+  					this.mute = null;
+  				}
+  			};
+  			bus.gain.connect(bus.solo);
+  			bus.solo.connect(bus.mute);
+  			return bus;
+  		},
+  set_sample_bus_count:function (count) {
+  			console.info(`set_sample_bus_count(${count})`);
+  			/** @type {AudioContext} */
+  			const ctx = GodotAudio.ctx;
+  			/** @type {Bus[]} */
+  			const buses = GodotAudio.buses;
+  
+  			if (count === buses.length) {
+  				return;
+  			}
+  
+  			if (count < buses.length) {
+  				// TODO: what to do with nodes connected to the deleted buses?
+  				const deletedBuses = buses.slice(count);
+  				for (const deletedBus of deletedBuses) {
+  					deletedBus.clear();
+  				}
+  				GodotAudio.buses = buses.slice(0, count);
+  				return;
+  			}
+  
+  			// count > buses.length
+  			for (let i = buses.length; i < count; i++) {
+  				/** @type {Bus} */
+  				const bus = GodotAudio.create_sample_bus();
+  				bus.getOutputNode().connect(ctx.destination);
+  				buses.push(bus);
+  			}
+  		},
+  remove_sample_bus:function (index) {
+  			console.info(`remove_sample_bus(${index})`);
+  			/** @type {Bus[]} */
+  			const buses = GodotAudio.buses;
+  			const deletedBus = buses[index];
+  			deletedBus.clear();
+  			GodotAudio.buses = buses.filter((_, i) => i !== index);
+  		},
+  add_sample_bus:function (atPos) {
+  			console.info(`add_sample_bus(${atPos})`);
+  			/** @type {AudioContext} */
+  			const ctx = GodotAudio.ctx;
+  			/** @type {Bus} */
+  			const newBus = GodotAudio.create_sample_bus();
+  			newBus.getOutputNode().connect(ctx.destination);
+  			/** @type {Bus[]} */
+  			const buses = GodotAudio.buses;
+  			GodotAudio.buses = [].concat(
+  				buses.slice(0, atPos),
+  				bus,
+  				buses.slice(atPos)
+  			);
+  		},
+  move_sample_bus:function (busIndex, toPos) {
+  			console.info(`move_sample_bus(${busIndex}, ${toPos})`);
+  			/** @type {AudioContext} */
+  			const ctx = GodotAudio.ctx;
+  			/** @type {Bus[]} */
+  			let buses = GodotAudio.buses;
+  			let movedBus = buses[busIndex];
+  			buses = buses.filter((_, i) => i !== busIndex);
+  			GodotAudio.buses = [].concat(
+  				buses.slice(0, toPos - 1),
+  				movedBus,
+  				buses.slice(toPos - 1)
+  			);
+  
+  			/** @type {Map<number, SampleNode>} */
+  			const sampleNodes = GodotAudio.sampleNodes;
+  			sampleNodes.forEach((sampleNode) => {
+  				if (sampleNode.currentBus === busIndex) {
+  					sampleNode.currentBus = toPos;
+  					return;
+  				}
+  				if (sampleNode.currentBus < toPos) {
+  					sampleNode.currentBus -= 1;
+  				}
+  			});
+  		},
+  set_sample_bus_volume_db:function (busIndex, volumeDb) {
+  			console.info(`set_sample_bus_volume_db(${busIndex}, ${volumeDb})`);
+  			/** @type {Bus} */
+  			const bus = GodotAudio.buses[busIndex];
+  			bus.gain.gain.value = GodotAudio.db_to_linear(volumeDb);
+  		},
+  set_sample_bus_solo:function (busIndex, enable) {
+  			console.info(`set_sample_bus_solo(${busIndex}, ${enable})`);
+  			/** @type {Bus[]} */
+  			const buses = GodotAudio.buses;
+  			const bus = buses[busIndex];
+  			bus.solo.gain.value = enable ? 1 : 0;
+  			const otherBuses = buses.filter((_, i) => i !== busIndex);
+  			for (const otherBus of otherBuses) {
+  				otherBus.solo.gain.value = enable ? 0 : 1;
+  			}
+  		},
+  set_sample_bus_mute:function (busIndex, enable) {
+  			console.info(`set_sample_bus_mute(${busIndex}, ${enable})`);
+  			/** @type {Bus} */
+  			const bus = GodotAudio.buses[busIndex];
+  			bus.mute.gain.value = enable ? 0 : 1;
   		},
   };
   function _godot_audio_has_worklet() {
@@ -9775,33 +10025,63 @@ function dbg(...args) {
   		}
   	}
 
-  function _godot_audio_sample_is_active(playbackObjectId) {
-  		return GodotAudio.sampleNodesList.has(playbackObjectId);
+  function _godot_audio_sample_bus_add(atPos) {
+  		GodotAudio.add_sample_bus(atPos);
   	}
 
-  function _godot_audio_sample_register_stream(streamObjectId, framesPtr, framesTotal, numberOfChannels, sampleRate, loopModeStrPtr, loopBegin, loopEnd) {
+  function _godot_audio_sample_bus_move(bus, toPos) {
+  		GodotAudio.move_sample_bus(bus, toPos);
+  	}
+
+  function _godot_audio_sample_bus_remove(index) {
+  		GodotAudio.remove_sample_bus(index);
+  	}
+
+  function _godot_audio_sample_bus_set_count(count) {
+  		GodotAudio.set_sample_bus_count(count);
+  	}
+
+  function _godot_audio_sample_bus_set_mute(bus, enable) {
+  		GodotAudio.set_sample_bus_mute(bus, enable);
+  	}
+
+  function _godot_audio_sample_bus_set_solo(bus, enable) {
+  		GodotAudio.set_sample_bus_solo(bus, enable);
+  	}
+
+  function _godot_audio_sample_bus_set_volume_db(bus, volumeDb) {
+  		GodotAudio.set_sample_bus_volume_db(bus, volumeDb);
+  	}
+
+  function _godot_audio_sample_is_active(playbackObjectIdStrPtr) {
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
+  		return GodotAudio.sampleNodes.has(playbackObjectId);
+  	}
+
+  function _godot_audio_sample_register_stream(streamObjectIdStrPtr, framesPtr, framesTotal, sampleRate, loopModeStrPtr, loopBegin, loopEnd) {
+  		const BYTES_PER_FLOAT32 = 4;
+  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
   		const loopMode = GodotRuntime.parseString(loopModeStrPtr);
-  		// eslint-disable-next-line no-param-reassign
-  		numberOfChannels = 2;
+  		const numberOfChannels = 2;
   
+  		/** @type {Sample} */
   		const sample = {
-  			ready: false,
-  			numberOfChannels,
+  			id: streamObjectId,
+  			audioBuffer: null,
   			sampleRate,
   			loopMode,
   			loopBegin,
   			loopEnd,
   		};
-  		console.log(sample);
   
   		/** @type {Float32Array} */
   		const subLeft = GodotRuntime.heapSub(HEAPF32, framesPtr, framesTotal);
   		/** @type {Float32Array} */
-  		const subRight = GodotRuntime.heapSub(HEAPF32, framesPtr + (framesTotal * 4), framesTotal);
+  		const subRight = GodotRuntime.heapSub(HEAPF32, framesPtr + (framesTotal * BYTES_PER_FLOAT32), framesTotal);
   
   		/** @type {AudioContext} */
   		const ctx = GodotAudio.ctx;
-  		const audioBuffer = ctx.createBuffer(2, framesTotal, GodotAudio.ctx.sampleRate);
+  		const audioBuffer = ctx.createBuffer(numberOfChannels, framesTotal, GodotAudio.ctx.sampleRate);
   		audioBuffer.copyToChannel(new Float32Array(subLeft), 0, 0);
   		audioBuffer.copyToChannel(new Float32Array(subRight), 1, 0);
   
@@ -9810,23 +10090,29 @@ function dbg(...args) {
   		GodotAudio.samples.set(streamObjectId, sample);
   	}
 
-  function _godot_audio_sample_start(playbackObjectId, streamObjectId, offset, volumeDb, positionModeStrPtr, positionPtr) {
+  function _godot_audio_sample_set_pause(playbackObjectIdStrPtr, pause) {
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
+  		GodotAudio.sample_set_pause(playbackObjectId, pause);
+  	}
+
+  function _godot_audio_sample_start(playbackObjectIdStrPtr, streamObjectIdStrPtr, busIndex, offset, volumeDb, positionModeStrPtr) {
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
+  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
+  		/** @type {string} */
   		const positionMode = GodotRuntime.parseString(positionModeStrPtr);
-  		const position = {
-  			x: GodotRuntime.getHeapValue(positionPtr, 'double'),
-  			y: GodotRuntime.getHeapValue(positionPtr + 8, 'double'),
-  			z: GodotRuntime.getHeapValue(positionPtr + 16, 'double'),
-  		};
+  		/** @type {SampleNodeStartOptions} */
   		const startOptions = {
   			offset,
   			volumeDb,
   			positionMode,
-  			position,
+  			busIndex,
+  			playbackRate: 1
   		};
   		GodotAudio.start_sample(playbackObjectId, streamObjectId, startOptions);
   	}
 
-  function _godot_audio_sample_stop(playbackObjectId) {
+  function _godot_audio_sample_stop(playbackObjectIdStrPtr) {
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
   		GodotAudio.stop_sample(playbackObjectId);
   	}
 
@@ -9834,11 +10120,13 @@ function dbg(...args) {
   		return GodotAudio.samples.has(streamObjectId);
   	}
 
-  function _godot_audio_sample_unregister_stream(streamObjectId) {
+  function _godot_audio_sample_unregister_stream(streamObjectIdStrPtr) {
+  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
   		GodotAudio.samples.delete(streamObjectId);
   	}
 
-  function _godot_audio_sample_update(playbackObjectId, pan, volumeDb, pitchScale) {
+  function _godot_audio_sample_update(playbackObjectIdStrPtr, pan, volumeDb, pitchScale) {
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
   		GodotAudio.update_sample(playbackObjectId, pan, volumeDb, pitchScale);
   	}
 
@@ -13362,8 +13650,6 @@ function dbg(...args) {
 
 
   
-  
-  var stackAlloc = (sz) => __emscripten_stack_alloc(sz);
   var stringToUTF8OnStack = (str) => {
       var size = lengthBytesUTF8(str) + 1;
       var ret = stackAlloc(size);
@@ -13470,11 +13756,11 @@ var GLctx;;
 for (var i = 0; i < 32; ++i) tempFixedLengthArray.push(new Array(i));;
 var miniTempWebGLIntBuffersStorage = new Int32Array(288);
   for (/**@suppress{duplicate}*/var i = 0; i < 288; ++i) {
-    miniTempWebGLIntBuffers[i] = miniTempWebGLIntBuffersStorage.subarray(0, i);
+    miniTempWebGLIntBuffers[i] = miniTempWebGLIntBuffersStorage.subarray(0, i+1);
   };
 var miniTempWebGLFloatBuffersStorage = new Float32Array(288);
   for (/**@suppress{duplicate}*/var i = 0; i < 288; ++i) {
-    miniTempWebGLFloatBuffers[i] = miniTempWebGLFloatBuffersStorage.subarray(0, i);
+    miniTempWebGLFloatBuffers[i] = miniTempWebGLFloatBuffersStorage.subarray(0, i+1);
   };
 Module["request_quit"] = function() { GodotOS.request_quit() };Module["onExit"] = GodotOS.cleanup;GodotOS._fs_sync_promise = Promise.resolve();;
 Module["initConfig"] = GodotConfig.init_config;;
@@ -13855,9 +14141,25 @@ var wasmImports = {
   /** @export */
   godot_audio_resume: _godot_audio_resume,
   /** @export */
+  godot_audio_sample_bus_add: _godot_audio_sample_bus_add,
+  /** @export */
+  godot_audio_sample_bus_move: _godot_audio_sample_bus_move,
+  /** @export */
+  godot_audio_sample_bus_remove: _godot_audio_sample_bus_remove,
+  /** @export */
+  godot_audio_sample_bus_set_count: _godot_audio_sample_bus_set_count,
+  /** @export */
+  godot_audio_sample_bus_set_mute: _godot_audio_sample_bus_set_mute,
+  /** @export */
+  godot_audio_sample_bus_set_solo: _godot_audio_sample_bus_set_solo,
+  /** @export */
+  godot_audio_sample_bus_set_volume_db: _godot_audio_sample_bus_set_volume_db,
+  /** @export */
   godot_audio_sample_is_active: _godot_audio_sample_is_active,
   /** @export */
   godot_audio_sample_register_stream: _godot_audio_sample_register_stream,
+  /** @export */
+  godot_audio_sample_set_pause: _godot_audio_sample_set_pause,
   /** @export */
   godot_audio_sample_start: _godot_audio_sample_start,
   /** @export */
@@ -14139,27 +14441,27 @@ var wasmImports = {
   /** @export */
   godot_webxr_update_target_frame_rate: _godot_webxr_update_target_frame_rate,
   /** @export */
-  invoke_ii,
+  invoke_ii: invoke_ii,
   /** @export */
-  invoke_iii,
+  invoke_iii: invoke_iii,
   /** @export */
-  invoke_iiii,
+  invoke_iiii: invoke_iiii,
   /** @export */
-  invoke_iiiii,
+  invoke_iiiii: invoke_iiiii,
   /** @export */
-  invoke_iiiiiii,
+  invoke_iiiiiii: invoke_iiiiiii,
   /** @export */
-  invoke_iiiiiiiiii,
+  invoke_iiiiiiiiii: invoke_iiiiiiiiii,
   /** @export */
-  invoke_v,
+  invoke_v: invoke_v,
   /** @export */
-  invoke_vi,
+  invoke_vi: invoke_vi,
   /** @export */
-  invoke_vii,
+  invoke_vii: invoke_vii,
   /** @export */
-  invoke_viii,
+  invoke_viii: invoke_viii,
   /** @export */
-  invoke_viiii,
+  invoke_viiii: invoke_viiii,
   /** @export */
   proc_exit: _proc_exit,
   /** @export */
@@ -14168,25 +14470,26 @@ var wasmImports = {
   strftime_l: _strftime_l
 };
 var wasmExports = createWasm();
-var ___wasm_call_ctors = createExportWrapper('__wasm_call_ctors', 0);
-var _free = createExportWrapper('free', 1);
-var __Z14godot_web_mainiPPc = Module['__Z14godot_web_mainiPPc'] = createExportWrapper('_Z14godot_web_mainiPPc', 2);
-var _main = Module['_main'] = createExportWrapper('__main_argc_argv', 2);
-var _malloc = createExportWrapper('malloc', 1);
-var _fflush = createExportWrapper('fflush', 1);
-var _htonl = createExportWrapper('htonl', 1);
-var _htons = createExportWrapper('htons', 1);
-var _ntohs = createExportWrapper('ntohs', 1);
-var __emwebxr_on_input_event = Module['__emwebxr_on_input_event'] = createExportWrapper('_emwebxr_on_input_event', 2);
-var __emwebxr_on_simple_event = Module['__emwebxr_on_simple_event'] = createExportWrapper('_emwebxr_on_simple_event', 1);
-var ___funcs_on_exit = createExportWrapper('__funcs_on_exit', 0);
-var _setThrew = createExportWrapper('setThrew', 2);
+var ___wasm_call_ctors = createExportWrapper('__wasm_call_ctors');
+var _free = createExportWrapper('free');
+var __Z14godot_web_mainiPPc = Module['__Z14godot_web_mainiPPc'] = createExportWrapper('_Z14godot_web_mainiPPc');
+var _main = Module['_main'] = createExportWrapper('__main_argc_argv');
+var _malloc = createExportWrapper('malloc');
+var _fflush = createExportWrapper('fflush');
+var _htonl = createExportWrapper('htonl');
+var _htons = createExportWrapper('htons');
+var _ntohs = createExportWrapper('ntohs');
+var __emwebxr_on_input_event = Module['__emwebxr_on_input_event'] = createExportWrapper('_emwebxr_on_input_event');
+var __emwebxr_on_simple_event = Module['__emwebxr_on_simple_event'] = createExportWrapper('_emwebxr_on_simple_event');
+var ___funcs_on_exit = createExportWrapper('__funcs_on_exit');
+var _setThrew = createExportWrapper('setThrew');
 var _emscripten_stack_init = () => (_emscripten_stack_init = wasmExports['emscripten_stack_init'])();
 var _emscripten_stack_get_free = () => (_emscripten_stack_get_free = wasmExports['emscripten_stack_get_free'])();
 var _emscripten_stack_get_base = () => (_emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'])();
 var _emscripten_stack_get_end = () => (_emscripten_stack_get_end = wasmExports['emscripten_stack_get_end'])();
-var __emscripten_stack_restore = (a0) => (__emscripten_stack_restore = wasmExports['_emscripten_stack_restore'])(a0);
-var __emscripten_stack_alloc = (a0) => (__emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'])(a0);
+var stackSave = createExportWrapper('stackSave');
+var stackRestore = createExportWrapper('stackRestore');
+var stackAlloc = createExportWrapper('stackAlloc');
 var _emscripten_stack_get_current = () => (_emscripten_stack_get_current = wasmExports['emscripten_stack_get_current'])();
 
 function invoke_vi(index,a1) {
@@ -14324,9 +14627,9 @@ var missingLibrarySymbols = [
   'convertI32PairToI53',
   'convertI32PairToI53Checked',
   'convertU32PairToI53',
-  'getTempRet0',
-  'setTempRet0',
+  'getCallstack',
   'emscriptenLog',
+  'convertPCtoSourceLocation',
   'readEmAsmArgs',
   'listenOnce',
   'autoResumeAudioContext',
@@ -14401,8 +14704,7 @@ var missingLibrarySymbols = [
   'setCanvasElementSize',
   'getCanvasElementSize',
   'jsStackTrace',
-  'getCallstack',
-  'convertPCtoSourceLocation',
+  'stackTrace',
   'checkWasiClock',
   'wasiRightsToMuslOFlags',
   'wasiOFlagsToMuslOFlags',
@@ -14434,7 +14736,6 @@ var missingLibrarySymbols = [
   'writeAsciiToMemory',
   'setErrNo',
   'demangle',
-  'stackTrace',
 ];
 missingLibrarySymbols.forEach(missingLibrarySymbol)
 
@@ -14458,6 +14759,11 @@ var unexportedSymbols = [
   'abort',
   'wasmMemory',
   'wasmExports',
+  'stackAlloc',
+  'stackSave',
+  'stackRestore',
+  'getTempRet0',
+  'setTempRet0',
   'writeStackCookie',
   'checkStackCookie',
   'writeI53ToI64',
@@ -14466,9 +14772,6 @@ var unexportedSymbols = [
   'MAX_INT53',
   'MIN_INT53',
   'bigintToI53Checked',
-  'stackSave',
-  'stackRestore',
-  'stackAlloc',
   'ptrToString',
   'zeroMemory',
   'exitJS',
@@ -14498,6 +14801,7 @@ var unexportedSymbols = [
   'randomFill',
   'timers',
   'warnOnce',
+  'UNWIND_CACHE',
   'readEmAsmArgsArray',
   'jstoi_q',
   'jstoi_s',
@@ -14540,7 +14844,6 @@ var unexportedSymbols = [
   'findCanvasEventTarget',
   'currentFullscreenStrategy',
   'restoreOldWindowedStyle',
-  'UNWIND_CACHE',
   'ExitStatus',
   'getEnvStrings',
   'doReadv',
@@ -14742,35 +15045,9 @@ run();
 
 // end include: postamble.js
 
-// include: postamble_modularize.js
-// In MODULARIZE mode we wrap the generated code in a factory function
-// and return either the Module itself, or a promise of the module.
-//
-// We assign to the `moduleRtn` global here and configure closure to see
-// this as and extern so it won't get minified.
-
-moduleRtn = readyPromise;
-
-// Assertion for attempting to access module properties on the incoming
-// moduleArg.  In the past we used this object as the prototype of the module
-// and assigned properties to it, but now we return a distinct object.  This
-// keeps the instance private until it is ready (i.e the promise has been
-// resolved).
-for (const prop of Object.keys(Module)) {
-  if (!(prop in moduleArg)) {
-    Object.defineProperty(moduleArg, prop, {
-      configurable: true,
-      get() {
-        abort(`Access to module property ('${prop}') is no longer possible via the module constructor argument; Instead, use the result of the module constructor.`)
-      }
-    });
-  }
-}
-// end include: postamble_modularize.js
 
 
-
-  return moduleRtn;
+  return moduleArg.ready
 }
 );
 })();
@@ -14853,8 +15130,7 @@ const Features = { // eslint-disable-line no-unused-vars
 	 *
 	 * @returns {Array<string>} A list of human-readable missing features.
 	 * @function Engine.getMissingFeatures
-	 * @typedef {{ threads: boolean }} SupportedFeatures
-	 * @param {SupportedFeatures} supportedFeatures
+	 * @param {{threads: (boolean|undefined)}} supportedFeatures
 	 */
 	getMissingFeatures: function (supportedFeatures = {}) {
 		const {
