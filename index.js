@@ -603,11 +603,15 @@ function createExportWrapper(name, nargs) {
 
 // include: runtime_exceptions.js
 // end include: runtime_exceptions.js
+function findWasmBinary() {
+    var f = 'godot.web.template_release.dev.wasm32.nothreads.wasm';
+    if (!isDataURI(f)) {
+      return locateFile(f);
+    }
+    return f;
+}
+
 var wasmBinaryFile;
-  wasmBinaryFile = 'godot.web.template_release.dev.wasm32.nothreads.wasm';
-  if (!isDataURI(wasmBinaryFile)) {
-    wasmBinaryFile = locateFile(wasmBinaryFile);
-  }
 
 function getBinarySync(file) {
   if (file == wasmBinaryFile && wasmBinary) {
@@ -751,6 +755,8 @@ function createWasm() {
         readyPromiseReject(e);
     }
   }
+
+  if (!wasmBinaryFile) wasmBinaryFile = findWasmBinary();
 
   // If instantiation fails, reject the module ready promise.
   instantiateAsync(wasmBinary, wasmBinaryFile, info, receiveInstantiationResult).catch(readyPromiseReject);
@@ -1015,6 +1021,7 @@ function dbg(...args) {
 
   var wasmTableMirror = [];
   
+  /** @type {WebAssembly.Table} */
   var wasmTable;
   var getWasmTableEntry = (funcPtr) => {
       var func = wasmTableMirror[funcPtr];
@@ -5741,6 +5748,10 @@ function dbg(...args) {
   }
   }
 
+  var __abort_js = () => {
+      abort('native code called abort()');
+    };
+
   var nowIsMonotonic = 1;
   var __emscripten_get_now_is_monotonic = () => nowIsMonotonic;
 
@@ -5851,10 +5862,6 @@ function dbg(...args) {
         stringToUTF8(winterName, dst_name, 17);
         stringToUTF8(summerName, std_name, 17);
       }
-    };
-
-  var _abort = () => {
-      abort('native code called abort()');
     };
 
   
@@ -14618,6 +14625,8 @@ var wasmImports = {
   /** @export */
   __syscall_unlinkat: ___syscall_unlinkat,
   /** @export */
+  _abort_js: __abort_js,
+  /** @export */
   _emscripten_get_now_is_monotonic: __emscripten_get_now_is_monotonic,
   /** @export */
   _emscripten_runtime_keepalive_clear: __emscripten_runtime_keepalive_clear,
@@ -14629,8 +14638,6 @@ var wasmImports = {
   _localtime_js: __localtime_js,
   /** @export */
   _tzset_js: __tzset_js,
-  /** @export */
-  abort: _abort,
   /** @export */
   emscripten_cancel_main_loop: _emscripten_cancel_main_loop,
   /** @export */
