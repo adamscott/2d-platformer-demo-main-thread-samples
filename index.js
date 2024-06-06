@@ -9946,10 +9946,10 @@ function dbg(...args) {
   		const self = this;
   		this._source.addEventListener('ended', (_) => {
   			switch (self.getSample().loopMode) {
-  				case 'none':
-  					GodotAudio.SampleNode.stopSampleNode(self.id);
-  					break;
-  				default:
+  			case 'none':
+  				GodotAudio.SampleNode.stopSampleNode(self.id);
+  				break;
+  			default:
   				// do nothing
   			}
   		});
@@ -10485,15 +10485,15 @@ function dbg(...args) {
   		ctx.onstatechange = function () {
   			let state = 0;
   			switch (ctx.state) {
-  				case 'suspended':
-  					state = 0;
-  					break;
-  				case 'running':
-  					state = 1;
-  					break;
-  				case 'closed':
-  					state = 2;
-  					break;
+  			case 'suspended':
+  				state = 0;
+  				break;
+  			case 'running':
+  				state = 1;
+  				break;
+  			case 'closed':
+  				state = 2;
+  				break;
   
   				// no default
   			}
