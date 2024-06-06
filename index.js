@@ -9946,10 +9946,10 @@ function dbg(...args) {
   		const self = this;
   		this._source.addEventListener('ended', (_) => {
   			switch (self.getSample().loopMode) {
-  			case 'none':
-  				GodotAudio.SampleNode.stopSampleNode(self.id);
-  				break;
-  			default:
+  				case 'none':
+  					GodotAudio.SampleNode.stopSampleNode(self.id);
+  					break;
+  				default:
   				// do nothing
   			}
   		});
@@ -10485,15 +10485,15 @@ function dbg(...args) {
   		ctx.onstatechange = function () {
   			let state = 0;
   			switch (ctx.state) {
-  			case 'suspended':
-  				state = 0;
-  				break;
-  			case 'running':
-  				state = 1;
-  				break;
-  			case 'closed':
-  				state = 2;
-  				break;
+  				case 'suspended':
+  					state = 0;
+  					break;
+  				case 'running':
+  					state = 1;
+  					break;
+  				case 'closed':
+  					state = 2;
+  					break;
   
   				// no default
   			}
@@ -10653,6 +10653,11 @@ function dbg(...args) {
   		bus.mute(enable);
   	},
   };
+  function _godot_audio_get_browser_mix_rate() {
+  		const ctx = new AudioContext();
+  		return ctx.sampleRate;
+  	}
+
   function _godot_audio_has_worklet() {
   		return GodotAudio.ctx && GodotAudio.ctx.audioWorklet ? 1 : 0;
   	}
@@ -14912,6 +14917,8 @@ var wasmImports = {
   glVertexAttribPointer: _glVertexAttribPointer,
   /** @export */
   glViewport: _glViewport,
+  /** @export */
+  godot_audio_get_browser_mix_rate: _godot_audio_get_browser_mix_rate,
   /** @export */
   godot_audio_has_worklet: _godot_audio_has_worklet,
   /** @export */
