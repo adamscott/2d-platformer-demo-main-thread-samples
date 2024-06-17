@@ -20,7 +20,7 @@ function(moduleArg = {}) {
 // after the generated code, you will need to define   var Module = {};
 // before the code. Then that object will be used in the code, and you
 // can continue to use Module afterwards as well.
-var Module = Object.assign({}, moduleArg);
+var Module = moduleArg;
 
 // Set up the promise that indicates the Module is initialized
 var readyPromiseResolve, readyPromiseReject;
@@ -79,9 +79,7 @@ function locateFile(path) {
 }
 
 // Hooks that are implemented differently in different runtime environments.
-var read_,
-    readAsync,
-    readBinary;
+var readAsync, readBinary;
 
 if (ENVIRONMENT_IS_SHELL) {
 
@@ -119,14 +117,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
 
   {
 // include: web_or_worker_shell_read.js
-read_ = (url) => {
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', url, false);
-    xhr.send(null);
-    return xhr.responseText;
-  }
-
-  if (ENVIRONMENT_IS_WORKER) {
+if (ENVIRONMENT_IS_WORKER) {
     readBinary = (url) => {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, false);
@@ -136,21 +127,16 @@ read_ = (url) => {
     };
   }
 
-  readAsync = (url, onload, onerror) => {
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', url, true);
-    xhr.responseType = 'arraybuffer';
-    xhr.onload = () => {
-      if (xhr.status == 200 || (xhr.status == 0 && xhr.response)) { // file URLs can return 0
-        onload(xhr.response);
-        return;
-      }
-      onerror();
-    };
-    xhr.onerror = onerror;
-    xhr.send(null);
-  }
-
+  readAsync = (url) => {
+    assert(!isFileURI(url), "readAsync does not work with file:// URLs");
+    return fetch(url, { credentials: 'same-origin' })
+      .then((response) => {
+        if (response.ok) {
+          return response.arrayBuffer();
+        }
+        return Promise.reject(new Error(response.status + ' : ' + response.url));
+      })
+  };
 // end include: web_or_worker_shell_read.js
   }
 } else
@@ -185,13 +171,12 @@ assert(typeof Module['memoryInitializerPrefixURL'] == 'undefined', 'Module.memor
 assert(typeof Module['pthreadMainPrefixURL'] == 'undefined', 'Module.pthreadMainPrefixURL option was removed, use Module.locateFile instead');
 assert(typeof Module['cdInitializerPrefixURL'] == 'undefined', 'Module.cdInitializerPrefixURL option was removed, use Module.locateFile instead');
 assert(typeof Module['filePackagePrefixURL'] == 'undefined', 'Module.filePackagePrefixURL option was removed, use Module.locateFile instead');
-assert(typeof Module['read'] == 'undefined', 'Module.read option was removed (modify read_ in JS)');
+assert(typeof Module['read'] == 'undefined', 'Module.read option was removed');
 assert(typeof Module['readAsync'] == 'undefined', 'Module.readAsync option was removed (modify readAsync in JS)');
 assert(typeof Module['readBinary'] == 'undefined', 'Module.readBinary option was removed (modify readBinary in JS)');
 assert(typeof Module['setWindowTitle'] == 'undefined', 'Module.setWindowTitle option was removed (modify emscripten_set_window_title in JS)');
 assert(typeof Module['TOTAL_MEMORY'] == 'undefined', 'Module.TOTAL_MEMORY has been renamed Module.INITIAL_MEMORY');
 legacyModuleProp('asm', 'wasmExports');
-legacyModuleProp('read', 'read_');
 legacyModuleProp('readAsync', 'readAsync');
 legacyModuleProp('readBinary', 'readBinary');
 legacyModuleProp('setWindowTitle', 'setWindowTitle');
@@ -624,22 +609,15 @@ function getBinarySync(file) {
 }
 
 function getBinaryPromise(binaryFile) {
-  // If we don't have the binary yet, try to load it asynchronously.
-  // Fetch has some additional restrictions over XHR, like it can't be used on a file:// url.
-  // See https://github.com/github/fetch/pull/92#issuecomment-140665932
-  // Cordova or Electron apps are typically loaded from a file:// url.
-  // So use fetch if it is available and the url is not a file, otherwise fall back to XHR.
+  // If we don't have the binary yet, load it asynchronously using readAsync.
   if (!wasmBinary
-      && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER)) {
-    if (typeof fetch == 'function'
-    ) {
-      return fetch(binaryFile, { credentials: 'same-origin' }).then((response) => {
-        if (!response['ok']) {
-          throw `failed to load wasm binary file at '${binaryFile}'`;
-        }
-        return response['arrayBuffer']();
-      }).catch(() => getBinarySync(binaryFile));
-    }
+      ) {
+    // Fetch the binary using readAsync
+    return readAsync(binaryFile).then(
+      (response) => new Uint8Array(/** @type{!ArrayBuffer} */(response)),
+      // Fall back to getBinarySync if readAsync fails
+      () => getBinarySync(binaryFile)
+    );
   }
 
   // Otherwise, getBinarySync should be able to get it synchronously
@@ -930,10 +908,6 @@ function dbg(...args) {
     }
   }
 
-  var stackRestore = (val) => __emscripten_stack_restore(val);
-
-  var stackSave = () => _emscripten_stack_get_current();
-
   var warnOnce = (text) => {
       warnOnce.shown ||= {};
       if (!warnOnce.shown[text]) {
@@ -942,7 +916,7 @@ function dbg(...args) {
       }
     };
 
-  var UTF8Decoder = typeof TextDecoder != 'undefined' ? new TextDecoder('utf8') : undefined;
+  var UTF8Decoder = typeof TextDecoder != 'undefined' ? new TextDecoder() : undefined;
   
     /**
      * Given a pointer 'idx' to a null-terminated UTF8-encoded string in the given
@@ -1262,13 +1236,8 @@ function dbg(...args) {
           if (result !== null) {
             result += '\n';
           }
-        } else if (typeof readline == 'function') {
-          // Command line.
-          result = readline();
-          if (result !== null) {
-            result += '\n';
-          }
-        }
+        } else
+        {}
         if (!result) {
           return null;
         }
@@ -1614,7 +1583,6 @@ function dbg(...args) {
           old_node.name = new_name;
           new_dir.contents[new_name] = old_node;
           new_dir.timestamp = old_node.parent.timestamp;
-          old_node.parent = new_dir;
         },
   unlink(parent, name) {
           delete parent.contents[name];
@@ -1764,17 +1732,20 @@ function dbg(...args) {
   /** @param {boolean=} noRunDep */
   var asyncLoad = (url, onload, onerror, noRunDep) => {
       var dep = !noRunDep ? getUniqueRunDependency(`al ${url}`) : '';
-      readAsync(url, (arrayBuffer) => {
-        assert(arrayBuffer, `Loading data file "${url}" failed (no arrayBuffer).`);
-        onload(new Uint8Array(arrayBuffer));
-        if (dep) removeRunDependency(dep);
-      }, (event) => {
-        if (onerror) {
-          onerror();
-        } else {
-          throw `Loading data file "${url}" failed.`;
+      readAsync(url).then(
+        (arrayBuffer) => {
+          assert(arrayBuffer, `Loading data file "${url}" failed (no arrayBuffer).`);
+          onload(new Uint8Array(arrayBuffer));
+          if (dep) removeRunDependency(dep);
+        },
+        (err) => {
+          if (onerror) {
+            onerror();
+          } else {
+            throw `Loading data file "${url}" failed.`;
+          }
         }
-      });
+      );
       if (dep) addRunDependency(dep);
     };
   
@@ -1868,7 +1839,79 @@ function dbg(...args) {
       },
   DB_VERSION:21,
   DB_STORE_NAME:"FILE_DATA",
-  mount:(...args) => MEMFS.mount(...args),
+  queuePersist:(mount) => {
+        function onPersistComplete() {
+          if (mount.idbPersistState === 'again') startPersist(); // If a new sync request has appeared in between, kick off a new sync
+          else mount.idbPersistState = 0; // Otherwise reset sync state back to idle to wait for a new sync later
+        }
+        function startPersist() {
+          mount.idbPersistState = 'idb'; // Mark that we are currently running a sync operation
+          IDBFS.syncfs(mount, /*populate:*/false, onPersistComplete);
+        }
+  
+        if (!mount.idbPersistState) {
+          // Programs typically write/copy/move multiple files in the in-memory
+          // filesystem within a single app frame, so when a filesystem sync
+          // command is triggered, do not start it immediately, but only after
+          // the current frame is finished. This way all the modified files
+          // inside the main loop tick will be batched up to the same sync.
+          mount.idbPersistState = setTimeout(startPersist, 0);
+        } else if (mount.idbPersistState === 'idb') {
+          // There is an active IndexedDB sync operation in-flight, but we now
+          // have accumulated more files to sync. We should therefore queue up
+          // a new sync after the current one finishes so that all writes
+          // will be properly persisted.
+          mount.idbPersistState = 'again';
+        }
+      },
+  mount:(mount) => {
+        // reuse core MEMFS functionality
+        var mnt = MEMFS.mount(mount);
+        // If the automatic IDBFS persistence option has been selected, then automatically persist
+        // all modifications to the filesystem as they occur.
+        if (mount?.opts?.autoPersist) {
+          mnt.idbPersistState = 0; // IndexedDB sync starts in idle state
+          var memfs_node_ops = mnt.node_ops;
+          mnt.node_ops = Object.assign({}, mnt.node_ops); // Clone node_ops to inject write tracking
+          mnt.node_ops.mknod = (parent, name, mode, dev) => {
+            var node = memfs_node_ops.mknod(parent, name, mode, dev);
+            // Propagate injected node_ops to the newly created child node
+            node.node_ops = mnt.node_ops;
+            // Remember for each IDBFS node which IDBFS mount point they came from so we know which mount to persist on modification.
+            node.idbfs_mount = mnt.mount;
+            // Remember original MEMFS stream_ops for this node
+            node.memfs_stream_ops = node.stream_ops;
+            // Clone stream_ops to inject write tracking
+            node.stream_ops = Object.assign({}, node.stream_ops);
+  
+            // Track all file writes
+            node.stream_ops.write = (stream, buffer, offset, length, position, canOwn) => {
+              // This file has been modified, we must persist IndexedDB when this file closes
+              stream.node.isModified = true;
+              return node.memfs_stream_ops.write(stream, buffer, offset, length, position, canOwn);
+            };
+  
+            // Persist IndexedDB on file close
+            node.stream_ops.close = (stream) => {
+              var n = stream.node;
+              if (n.isModified) {
+                IDBFS.queuePersist(n.idbfs_mount);
+                n.isModified = false;
+              }
+              if (n.memfs_stream_ops.close) return n.memfs_stream_ops.close(stream);
+            };
+  
+            return node;
+          };
+          // Also kick off persisting the filesystem on other operations that modify the filesystem.
+          mnt.node_ops.mkdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.mkdir(...args));
+          mnt.node_ops.rmdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.rmdir(...args));
+          mnt.node_ops.symlink = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.symlink(...args));
+          mnt.node_ops.unlink  = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.unlink(...args));
+          mnt.node_ops.rename  = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.rename(...args));
+        }
+        return mnt;
+      },
   syncfs:(mount, populate, callback) => {
         IDBFS.getLocalSet(mount, (err, local) => {
           if (err) return callback(err);
@@ -2751,6 +2794,7 @@ function dbg(...args) {
       },
   getStream:(fd) => FS.streams[fd],
   createStream(stream, fd = -1) {
+        assert(fd >= -1);
   
         // clone it, so we can return an instance of FSStream
         stream = Object.assign(new FS.FSStream(), stream);
@@ -3076,6 +3120,9 @@ function dbg(...args) {
         // do the underlying fs rename
         try {
           old_dir.node_ops.rename(old_node, new_dir, new_name);
+          // update old node (we do this here to avoid each backend 
+          // needing to)
+          old_node.parent = new_dir;
         } catch (e) {
           throw e;
         } finally {
@@ -3253,8 +3300,8 @@ function dbg(...args) {
           throw new FS.ErrnoError(44);
         }
         flags = typeof flags == 'string' ? FS_modeStringToFlags(flags) : flags;
-        mode = typeof mode == 'undefined' ? 438 /* 0666 */ : mode;
         if ((flags & 64)) {
+          mode = typeof mode == 'undefined' ? 438 /* 0666 */ : mode;
           mode = (mode & 4095) | 32768;
         } else {
           mode = 0;
@@ -3805,18 +3852,13 @@ function dbg(...args) {
         if (obj.isDevice || obj.isFolder || obj.link || obj.contents) return true;
         if (typeof XMLHttpRequest != 'undefined') {
           throw new Error("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
-        } else if (read_) {
-          // Command-line.
+        } else { // Command-line.
           try {
-            // WARNING: Can't read binary files in V8's d8 or tracemonkey's js, as
-            //          read() will try to parse UTF8.
-            obj.contents = intArrayFromString(read_(obj.url), true);
+            obj.contents = readBinary(obj.url);
             obj.usedBytes = obj.contents.length;
           } catch (e) {
             throw new FS.ErrnoError(29);
           }
-        } else {
-          throw new Error('Cannot load without read() or XMLHttpRequest.');
         }
       },
   createLazyFile(parent, name, url, canRead, canWrite) {
@@ -5760,10 +5802,6 @@ function dbg(...args) {
       runtimeKeepaliveCounter = 0;
     };
 
-  var __emscripten_throw_longjmp = () => {
-      throw Infinity;
-    };
-
   function __gmtime_js(time, tmPtr) {
     time = bigintToI53Checked(time);
   
@@ -6056,6 +6094,7 @@ function dbg(...args) {
   stringiCache:{
   },
   unpackAlignment:4,
+  unpackRowLength:0,
   recordError:(errorCode) => {
         if (!GL.lastError) {
           GL.lastError = errorCode;
@@ -8868,20 +8907,22 @@ function dbg(...args) {
     };
 
   var _glPixelStorei = (pname, param) => {
-      if (pname == 0xCF5 /* GL_UNPACK_ALIGNMENT */) {
+      if (pname == 3317) {
         GL.unpackAlignment = param;
+      } else if (pname == 3314) {
+        GL.unpackRowLength = param;
       }
       GLctx.pixelStorei(pname, param);
     };
 
   var _glReadBuffer = (x0) => GLctx.readBuffer(x0);
 
-  var computeUnpackAlignedImageSize = (width, height, sizePerPixel, alignment) => {
+  var computeUnpackAlignedImageSize = (width, height, sizePerPixel) => {
       function roundedToNextMultipleOf(x, y) {
         return (x + y - 1) & -y;
       }
-      var plainRowSize = width * sizePerPixel;
-      var alignedRowSize = roundedToNextMultipleOf(plainRowSize, alignment);
+      var plainRowSize = (GL.unpackRowLength || width) * sizePerPixel;
+      var alignedRowSize = roundedToNextMultipleOf(plainRowSize, GL.unpackAlignment);
       return height * alignedRowSize;
     };
   
@@ -8942,7 +8983,7 @@ function dbg(...args) {
   var emscriptenWebGLGetTexPixelData = (type, format, width, height, pixels, internalFormat) => {
       var heap = heapObjectForWebGLType(type);
       var sizePerPixel = colorChannelsInGlTextureFormat(format) * heap.BYTES_PER_ELEMENT;
-      var bytes = computeUnpackAlignedImageSize(width, height, sizePerPixel, GL.unpackAlignment);
+      var bytes = computeUnpackAlignedImageSize(width, height, sizePerPixel);
       return heap.subarray(toTypedArrayIndex(pixels, heap), toTypedArrayIndex(pixels + bytes, heap));
     };
   
@@ -9882,7 +9923,10 @@ function dbg(...args) {
   	 * @returns {void}
   	 */
   	static pauseSampleNode(id, enable) {
-  		const sampleNode = GodotAudio.SampleNode.getSampleNode(id);
+  		const sampleNode = GodotAudio.SampleNode.getSampleNodeOrNull(id);
+  		if (sampleNode == null) {
+  			return;
+  		}
   		sampleNode.pause(enable);
   	}
   
@@ -9920,8 +9964,6 @@ function dbg(...args) {
   		this.streamObjectId = params.streamObjectId;
   		/** @type {number} */
   		this.offset = options.offset ?? 0;
-  		/** @type {PositionMode} */
-  		this.positionMode = options.positionMode ?? 'none';
   		/** @type {LoopMode} */
   		this.startTime = options.startTime ?? 0;
   		/** @type {number} */
@@ -9946,7 +9988,7 @@ function dbg(...args) {
   		const self = this;
   		this._source.addEventListener('ended', (_) => {
   			switch (self.getSample().loopMode) {
-  			case 'none':
+  			case 'disabled':
   				GodotAudio.SampleNode.stopSampleNode(self.id);
   				break;
   			default:
@@ -9974,7 +10016,14 @@ function dbg(...args) {
   	 */
   	setLoopMode(val) {
   		this._loopMode = val;
-  		this._source.loop = val === 'forward';
+  		switch (val) {
+  		case 'forward':
+  		case 'backward':
+  			this._source.loop = true;
+  			break;
+  		default:
+  			this._source.loop = false;
+  		}
   	}
   
   	/**
@@ -10061,6 +10110,9 @@ function dbg(...args) {
   		if (this.pauseTime === 0) {
   			return;
   		}
+  
+  		this._source.disconnect();
+  		this._source = GodotAudio.ctx.createBufferSource();
   
   		this._source.buffer = this.getSample().getAudioBuffer();
   		this._source.connect(this._gain);
@@ -10458,206 +10510,198 @@ function dbg(...args) {
   driver:null,
   interval:0,
   linear_to_db:function (linear) {
-  		// eslint-disable-next-line no-loss-of-precision
-  		return Math.log(linear) * 8.6858896380650365530225783783321;
-  	},
+  			// eslint-disable-next-line no-loss-of-precision
+  			return Math.log(linear) * 8.6858896380650365530225783783321;
+  		},
   db_to_linear:function (db) {
-  		// eslint-disable-next-line no-loss-of-precision
-  		return Math.exp(db * 0.11512925464970228420089957273422);
-  	},
+  			// eslint-disable-next-line no-loss-of-precision
+  			return Math.exp(db * 0.11512925464970228420089957273422);
+  		},
   init:function (mix_rate, latency, onstatechange, onlatencyupdate) {
-  		// Initialize classes static values.
-  		GodotAudio.samples = new Map();
-  		GodotAudio.sampleNodes = new Map();
-  		GodotAudio.buses = [];
-  		GodotAudio.busSolo = null;
+  			// Initialize classes static values.
+  			GodotAudio.samples = new Map();
+  			GodotAudio.sampleNodes = new Map();
+  			GodotAudio.buses = [];
+  			GodotAudio.busSolo = null;
   
-  		const opts = {};
-  		// If mix_rate is 0, let the browser choose.
-  		if (mix_rate) {
-  			GodotAudio.sampleRate = mix_rate;
-  			opts['sampleRate'] = mix_rate;
-  		}
-  		// Do not specify, leave 'interactive' for good performance.
-  		// opts['latencyHint'] = latency / 1000;
-  		const ctx = new (window.AudioContext || window.webkitAudioContext)(opts);
-  		GodotAudio.ctx = ctx;
-  		ctx.onstatechange = function () {
-  			let state = 0;
-  			switch (ctx.state) {
-  			case 'suspended':
-  				state = 0;
-  				break;
-  			case 'running':
-  				state = 1;
-  				break;
-  			case 'closed':
-  				state = 2;
-  				break;
-  
-  				// no default
+  			const opts = {};
+  			// If mix_rate is 0, let the browser choose.
+  			if (mix_rate) {
+  				GodotAudio.sampleRate = mix_rate;
+  				opts['sampleRate'] = mix_rate;
   			}
-  			onstatechange(state);
-  		};
-  		ctx.onstatechange(); // Immediately notify state.
-  		// Update computed latency
-  		GodotAudio.interval = setInterval(function () {
-  			let computed_latency = 0;
-  			if (ctx.baseLatency) {
-  				computed_latency += GodotAudio.ctx.baseLatency;
-  			}
-  			if (ctx.outputLatency) {
-  				computed_latency += GodotAudio.ctx.outputLatency;
-  			}
-  			onlatencyupdate(computed_latency);
-  		}, 1000);
-  		GodotOS.atexit(GodotAudio.close_async);
-  		return ctx.destination.channelCount;
-  	},
+  			// Do not specify, leave 'interactive' for good performance.
+  			// opts['latencyHint'] = latency / 1000;
+  			const ctx = new (window.AudioContext || window.webkitAudioContext)(opts);
+  			GodotAudio.ctx = ctx;
+  			ctx.onstatechange = function () {
+  				let state = 0;
+  				switch (ctx.state) {
+  				case 'suspended':
+  					state = 0;
+  					break;
+  				case 'running':
+  					state = 1;
+  					break;
+  				case 'closed':
+  					state = 2;
+  					break;
+  				default:
+  					// Do nothing.
+  				}
+  				onstatechange(state);
+  			};
+  			ctx.onstatechange(); // Immediately notify state.
+  			// Update computed latency
+  			GodotAudio.interval = setInterval(function () {
+  				let computed_latency = 0;
+  				if (ctx.baseLatency) {
+  					computed_latency += GodotAudio.ctx.baseLatency;
+  				}
+  				if (ctx.outputLatency) {
+  					computed_latency += GodotAudio.ctx.outputLatency;
+  				}
+  				onlatencyupdate(computed_latency);
+  			}, 1000);
+  			GodotOS.atexit(GodotAudio.close_async);
+  			return ctx.destination.channelCount;
+  		},
   create_input:function (callback) {
-  		if (GodotAudio.input) {
-  			return 0; // Already started.
-  		}
-  		function gotMediaInput(stream) {
-  			try {
-  				GodotAudio.input = GodotAudio.ctx.createMediaStreamSource(stream);
-  				callback(GodotAudio.input);
-  			} catch (e) {
-  				GodotRuntime.error('Failed creating input.', e);
+  			if (GodotAudio.input) {
+  				return 0; // Already started.
   			}
-  		}
-  		if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-  			navigator.mediaDevices
-  				.getUserMedia({
-  					audio: true,
-  				})
-  				.then(gotMediaInput, function (e) {
+  			function gotMediaInput(stream) {
+  				try {
+  					GodotAudio.input = GodotAudio.ctx.createMediaStreamSource(stream);
+  					callback(GodotAudio.input);
+  				} catch (e) {
+  					GodotRuntime.error('Failed creating input.', e);
+  				}
+  			}
+  			if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  				navigator.mediaDevices.getUserMedia({
+  					'audio': true,
+  				}).then(gotMediaInput, function (e) {
   					GodotRuntime.error('Error getting user media.', e);
   				});
-  		} else {
-  			if (!navigator.getUserMedia) {
-  				navigator.getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-  			}
-  			if (!navigator.getUserMedia) {
-  				GodotRuntime.error('getUserMedia not available.');
-  				return 1;
-  			}
-  			navigator.getUserMedia(
-  				{
-  					audio: true,
-  				},
-  				gotMediaInput,
-  				function (e) {
-  					GodotRuntime.print(e);
+  			} else {
+  				if (!navigator.getUserMedia) {
+  					navigator.getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
   				}
-  			);
-  		}
-  		return 0;
-  	},
+  				if (!navigator.getUserMedia) {
+  					GodotRuntime.error('getUserMedia not available.');
+  					return 1;
+  				}
+  				navigator.getUserMedia({
+  					'audio': true,
+  				}, gotMediaInput, function (e) {
+  					GodotRuntime.print(e);
+  				});
+  			}
+  			return 0;
+  		},
   close_async:function (resolve, reject) {
-  		const ctx = GodotAudio.ctx;
-  		GodotAudio.ctx = null;
-  		// Audio was not initialized.
-  		if (!ctx) {
-  			resolve();
-  			return;
-  		}
-  		// Remove latency callback
-  		if (GodotAudio.interval) {
-  			clearInterval(GodotAudio.interval);
-  			GodotAudio.interval = 0;
-  		}
-  		// Disconnect input, if it was started.
-  		if (GodotAudio.input) {
-  			GodotAudio.input.disconnect();
-  			GodotAudio.input = null;
-  		}
-  		// Disconnect output
-  		let closed = Promise.resolve();
-  		if (GodotAudio.driver) {
-  			closed = GodotAudio.driver.close();
-  		}
-  		closed
-  			.then(function () {
+  			const ctx = GodotAudio.ctx;
+  			GodotAudio.ctx = null;
+  			// Audio was not initialized.
+  			if (!ctx) {
+  				resolve();
+  				return;
+  			}
+  			// Remove latency callback
+  			if (GodotAudio.interval) {
+  				clearInterval(GodotAudio.interval);
+  				GodotAudio.interval = 0;
+  			}
+  			// Disconnect input, if it was started.
+  			if (GodotAudio.input) {
+  				GodotAudio.input.disconnect();
+  				GodotAudio.input = null;
+  			}
+  			// Disconnect output
+  			let closed = Promise.resolve();
+  			if (GodotAudio.driver) {
+  				closed = GodotAudio.driver.close();
+  			}
+  			closed.then(function () {
   				return ctx.close();
-  			})
-  			.then(function () {
+  			}).then(function () {
   				ctx.onstatechange = null;
   				resolve();
-  			})
-  			.catch(function (e) {
+  			}).catch(function (e) {
   				ctx.onstatechange = null;
   				GodotRuntime.error('Error closing AudioContext', e);
   				resolve();
   			});
-  	},
+  		},
   start_sample:function (
-  		playbackObjectId,
-  		streamObjectId,
-  		busIndex,
-  		startOptions
-  	) {
-  		GodotAudio.SampleNode.stopSampleNode(playbackObjectId);
-  		const sampleNode = GodotAudio.SampleNode.create(
-  			{
-  				busIndex,
-  				id: playbackObjectId,
-  				streamObjectId,
-  			},
+  			playbackObjectId,
+  			streamObjectId,
+  			busIndex,
   			startOptions
-  		);
-  		sampleNode.start();
-  	},
+  		) {
+  			GodotAudio.SampleNode.stopSampleNode(playbackObjectId);
+  			const sampleNode = GodotAudio.SampleNode.create(
+  				{
+  					busIndex,
+  					id: playbackObjectId,
+  					streamObjectId,
+  				},
+  				startOptions
+  			);
+  			sampleNode.start();
+  		},
   stop_sample:function (playbackObjectId) {
-  		GodotAudio.SampleNode.stopSampleNode(playbackObjectId);
-  	},
+  			GodotAudio.SampleNode.stopSampleNode(playbackObjectId);
+  		},
   sample_set_pause:function (playbackObjectId, pause) {
-  		GodotAudio.SampleNode.pauseSampleNode(playbackObjectId, pause);
-  	},
+  			GodotAudio.SampleNode.pauseSampleNode(playbackObjectId, pause);
+  		},
   update_sample_pitch_scale:function (playbackObjectId, pitchScale) {
-  		const sampleNode = GodotAudio.SampleNode.getSampleNode(playbackObjectId);
-  		sampleNode.setPitchScale(pitchScale);
-  	},
-  sample_set_volumes_linear(playbackObjectId, busIndexes, volumes) {
-  		const sampleNode = GodotAudio.SampleNode.getSampleNode(playbackObjectId);
-  		const buses = busIndexes.map((busIndex) => GodotAudio.Bus.getBus(busIndex));
-  		sampleNode.setVolumes(buses, volumes);
-  	},
+  			const sampleNode = GodotAudio.SampleNode.getSampleNodeOrNull(playbackObjectId);
+  			if (sampleNode == null) {
+  				return;
+  			}
+  			sampleNode.setPitchScale(pitchScale);
+  		},
+  sample_set_volumes_linear:function (playbackObjectId, busIndexes, volumes) {
+  			const sampleNode = GodotAudio.SampleNode.getSampleNodeOrNull(playbackObjectId);
+  			if (sampleNode == null) {
+  				return;
+  			}
+  			const buses = busIndexes.map((busIndex) => GodotAudio.Bus.getBus(busIndex));
+  			sampleNode.setVolumes(buses, volumes);
+  		},
   set_sample_bus_count:function (count) {
-  		GodotAudio.Bus.setCount(count);
-  	},
+  			GodotAudio.Bus.setCount(count);
+  		},
   remove_sample_bus:function (index) {
-  		const bus = GodotAudio.Bus.getBus(index);
-  		bus.clear();
-  	},
+  			const bus = GodotAudio.Bus.getBus(index);
+  			bus.clear();
+  		},
   add_sample_bus:function (atPos) {
-  		GodotAudio.Bus.addAt(atPos);
-  	},
+  			GodotAudio.Bus.addAt(atPos);
+  		},
   move_sample_bus:function (busIndex, toPos) {
-  		GodotAudio.Bus.move(busIndex, toPos);
-  	},
+  			GodotAudio.Bus.move(busIndex, toPos);
+  		},
   set_sample_bus_send:function (busIndex, sendIndex) {
-  		const bus = GodotAudio.Bus.getBus(busIndex);
-  		bus.setSend(GodotAudio.Bus.getBus(sendIndex));
-  	},
+  			const bus = GodotAudio.Bus.getBus(busIndex);
+  			bus.setSend(GodotAudio.Bus.getBus(sendIndex));
+  		},
   set_sample_bus_volume_db:function (busIndex, volumeDb) {
-  		const bus = GodotAudio.Bus.getBus(busIndex);
-  		bus.volumeDb = volumeDb;
-  	},
+  			const bus = GodotAudio.Bus.getBus(busIndex);
+  			bus.volumeDb = volumeDb;
+  		},
   set_sample_bus_solo:function (busIndex, enable) {
-  		const bus = GodotAudio.Bus.getBus(busIndex);
-  		bus.solo(enable);
-  	},
+  			const bus = GodotAudio.Bus.getBus(busIndex);
+  			bus.solo(enable);
+  		},
   set_sample_bus_mute:function (busIndex, enable) {
-  		const bus = GodotAudio.Bus.getBus(busIndex);
-  		bus.mute(enable);
-  	},
+  			const bus = GodotAudio.Bus.getBus(busIndex);
+  			bus.mute(enable);
+  		},
   };
-  function _godot_audio_get_browser_mix_rate() {
-  		const ctx = new AudioContext();
-  		return ctx.sampleRate;
-  	}
-
   function _godot_audio_has_worklet() {
   		return GodotAudio.ctx && GodotAudio.ctx.audioWorklet ? 1 : 0;
   	}
@@ -10715,8 +10759,8 @@ function dbg(...args) {
   		GodotAudio.add_sample_bus(atPos);
   	}
 
-  function _godot_audio_sample_bus_move(bus, toPos) {
-  		GodotAudio.move_sample_bus(bus, toPos);
+  function _godot_audio_sample_bus_move(fromPos, toPos) {
+  		GodotAudio.move_sample_bus(fromPos, toPos);
   	}
 
   function _godot_audio_sample_bus_remove(index) {
@@ -10728,7 +10772,7 @@ function dbg(...args) {
   	}
 
   function _godot_audio_sample_bus_set_mute(bus, enable) {
-  		GodotAudio.set_sample_bus_mute(bus, enable);
+  		GodotAudio.set_sample_bus_mute(bus, Boolean(enable));
   	}
 
   function _godot_audio_sample_bus_set_send(bus, sendIndex) {
@@ -10736,7 +10780,7 @@ function dbg(...args) {
   	}
 
   function _godot_audio_sample_bus_set_solo(bus, enable) {
-  		GodotAudio.set_sample_bus_solo(bus, enable);
+  		GodotAudio.set_sample_bus_solo(bus, Boolean(enable));
   	}
 
   function _godot_audio_sample_bus_set_volume_db(bus, volumeDb) {
@@ -10745,7 +10789,7 @@ function dbg(...args) {
 
   function _godot_audio_sample_is_active(playbackObjectIdStrPtr) {
   		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
-  		return GodotAudio.sampleNodes.has(playbackObjectId);
+  		return Number(GodotAudio.sampleNodes.has(playbackObjectId));
   	}
 
   function _godot_audio_sample_register_stream(
@@ -10796,7 +10840,7 @@ function dbg(...args) {
 
   function _godot_audio_sample_set_pause(playbackObjectIdStrPtr, pause) {
   		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
-  		GodotAudio.sample_set_pause(playbackObjectId, pause);
+  		GodotAudio.sample_set_pause(playbackObjectId, Boolean(pause));
   	}
 
   function _godot_audio_sample_set_volumes_linear(
@@ -10806,6 +10850,7 @@ function dbg(...args) {
   		volumesPtr,
   		volumesSize
   	) {
+  		/** @type {string} */
   		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
   
   		/** @type {Uint32Array} */
@@ -10825,20 +10870,18 @@ function dbg(...args) {
   		streamObjectIdStrPtr,
   		busIndex,
   		offset,
-  		volumePtr,
-  		positionModeStrPtr
+  		volumePtr
   	) {
-  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
-  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
   		/** @type {string} */
-  		const positionMode = GodotRuntime.parseString(positionModeStrPtr);
+  		const playbackObjectId = GodotRuntime.parseString(playbackObjectIdStrPtr);
+  		/** @type {string} */
+  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
   		/** @type {Float32Array} */
   		const volume = GodotRuntime.heapSub(HEAPF32, volumePtr, 8);
   		/** @type {SampleNodeConstructorOptions} */
   		const startOptions = {
   			offset,
   			volume,
-  			positionMode,
   			playbackRate: 1,
   		};
   		GodotAudio.start_sample(
@@ -10854,8 +10897,9 @@ function dbg(...args) {
   		GodotAudio.stop_sample(playbackObjectId);
   	}
 
-  function _godot_audio_sample_stream_is_registered(streamObjectId) {
-  		return GodotAudio.Sample.getSampleOrNull(streamObjectId) != null;
+  function _godot_audio_sample_stream_is_registered(streamObjectIdStrPtr) {
+  		const streamObjectId = GodotRuntime.parseString(streamObjectIdStrPtr);
+  		return Number(GodotAudio.Sample.getSampleOrNull(streamObjectId) != null);
   	}
 
   function _godot_audio_sample_unregister_stream(streamObjectIdStrPtr) {
@@ -10901,8 +10945,8 @@ function dbg(...args) {
   				const node = GodotAudioWorklet.worklet;
   				node.connect(GodotAudio.ctx.destination);
   				node.port.postMessage({
-  					cmd: 'start',
-  					data: [state, in_buf, out_buf],
+  					'cmd': 'start',
+  					'data': [state, in_buf, out_buf],
   				});
   				node.port.onmessage = function (event) {
   					GodotRuntime.error(event.data);
@@ -10943,7 +10987,7 @@ function dbg(...args) {
   							tot_sent - pending_samples
   						);
   					}
-  					port.postMessage({ cmd: 'chunk', data: wbuf.subarray(0, tot_sent) });
+  					port.postMessage({ 'cmd': 'chunk', 'data': wbuf.subarray(0, tot_sent) });
   					wpos += pending_samples;
   					pending_samples = 0;
   				}
@@ -10975,8 +11019,8 @@ function dbg(...args) {
   				const buffer = GodotRuntime.heapSlice(HEAPF32, p_out_buf, p_out_size);
   				node.connect(GodotAudio.ctx.destination);
   				node.port.postMessage({
-  					cmd: 'start_nothreads',
-  					data: [buffer, p_in_size],
+  					'cmd': 'start_nothreads',
+  					'data': [buffer, p_in_size],
   				});
   				node.port.onmessage = function (event) {
   					if (!GodotAudioWorklet.worklet) {
@@ -11012,8 +11056,8 @@ function dbg(...args) {
   				const p = GodotAudioWorklet.promise;
   				p.then(function () {
   					GodotAudioWorklet.worklet.port.postMessage({
-  						cmd: 'stop',
-  						data: null,
+  						'cmd': 'stop',
+  						'data': null,
   					});
   					GodotAudioWorklet.worklet.disconnect();
   					GodotAudioWorklet.worklet.port.onmessage = null;
@@ -14200,7 +14244,6 @@ function dbg(...args) {
   
       // expand format
       var EXPANSION_RULES_1 = {
-        '%c': '%a %b %d %H:%M:%S %Y',     // Replaced by the locale's appropriate date and time representation - e.g., Mon Aug  3 14:02:01 2013
         '%D': '%m/%d/%y',                 // Equivalent to %m / %d / %y
         '%F': '%Y-%m-%d',                 // Equivalent to %Y - %m - %d
         '%h': '%b',                       // Equivalent to %b
@@ -14229,6 +14272,7 @@ function dbg(...args) {
         '%Ow': '%w',                      // Replaced by the number of the weekday (Sunday=0) using the locale's alternative numeric symbols.
         '%OW': '%W',                      // Replaced by the week number of the year (Monday as the first day of the week) using the locale's alternative numeric symbols.
         '%Oy': '%y',                      // Replaced by the year (offset from %C ) using the locale's alternative numeric symbols.
+        '%c': '%a %b %d %H:%M:%S %Y',     // Replaced by the locale's appropriate date and time representation - e.g., Mon Aug  3 14:02:01 2013
       };
       for (var rule in EXPANSION_RULES_1) {
         pattern = pattern.replace(new RegExp(rule, 'g'), EXPANSION_RULES_1[rule]);
@@ -14264,41 +14308,41 @@ function dbg(...args) {
       }
   
       function getFirstWeekStartDate(janFourth) {
-          switch (janFourth.getDay()) {
-            case 0: // Sunday
-              return new Date(janFourth.getFullYear()-1, 11, 29);
-            case 1: // Monday
-              return janFourth;
-            case 2: // Tuesday
-              return new Date(janFourth.getFullYear(), 0, 3);
-            case 3: // Wednesday
-              return new Date(janFourth.getFullYear(), 0, 2);
-            case 4: // Thursday
-              return new Date(janFourth.getFullYear(), 0, 1);
-            case 5: // Friday
-              return new Date(janFourth.getFullYear()-1, 11, 31);
-            case 6: // Saturday
-              return new Date(janFourth.getFullYear()-1, 11, 30);
-          }
+        switch (janFourth.getDay()) {
+          case 0: // Sunday
+            return new Date(janFourth.getFullYear()-1, 11, 29);
+          case 1: // Monday
+            return janFourth;
+          case 2: // Tuesday
+            return new Date(janFourth.getFullYear(), 0, 3);
+          case 3: // Wednesday
+            return new Date(janFourth.getFullYear(), 0, 2);
+          case 4: // Thursday
+            return new Date(janFourth.getFullYear(), 0, 1);
+          case 5: // Friday
+            return new Date(janFourth.getFullYear()-1, 11, 31);
+          case 6: // Saturday
+            return new Date(janFourth.getFullYear()-1, 11, 30);
+        }
       }
   
       function getWeekBasedYear(date) {
-          var thisDate = addDays(new Date(date.tm_year+1900, 0, 1), date.tm_yday);
+        var thisDate = addDays(new Date(date.tm_year+1900, 0, 1), date.tm_yday);
   
-          var janFourthThisYear = new Date(thisDate.getFullYear(), 0, 4);
-          var janFourthNextYear = new Date(thisDate.getFullYear()+1, 0, 4);
+        var janFourthThisYear = new Date(thisDate.getFullYear(), 0, 4);
+        var janFourthNextYear = new Date(thisDate.getFullYear()+1, 0, 4);
   
-          var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
-          var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
+        var firstWeekStartThisYear = getFirstWeekStartDate(janFourthThisYear);
+        var firstWeekStartNextYear = getFirstWeekStartDate(janFourthNextYear);
   
-          if (compareByDay(firstWeekStartThisYear, thisDate) <= 0) {
-            // this date is after the start of the first week of this year
-            if (compareByDay(firstWeekStartNextYear, thisDate) <= 0) {
-              return thisDate.getFullYear()+1;
-            }
-            return thisDate.getFullYear();
+        if (compareByDay(firstWeekStartThisYear, thisDate) <= 0) {
+          // this date is after the start of the first week of this year
+          if (compareByDay(firstWeekStartNextYear, thisDate) <= 0) {
+            return thisDate.getFullYear()+1;
           }
-          return thisDate.getFullYear()-1;
+          return thisDate.getFullYear();
+        }
+        return thisDate.getFullYear()-1;
       }
   
       var EXPANSION_RULES_2 = {
@@ -14442,7 +14486,6 @@ function dbg(...args) {
       return ret;
     };
 
-
   var getCFunc = (ident) => {
       var func = Module['_' + ident]; // closure exported function
       assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
@@ -14452,7 +14495,9 @@ function dbg(...args) {
   
   
   
+  var stackSave = () => _emscripten_stack_get_current();
   
+  var stackRestore = (val) => __emscripten_stack_restore(val);
   
   
   
@@ -14635,8 +14680,6 @@ var wasmImports = {
   _emscripten_get_now_is_monotonic: __emscripten_get_now_is_monotonic,
   /** @export */
   _emscripten_runtime_keepalive_clear: __emscripten_runtime_keepalive_clear,
-  /** @export */
-  _emscripten_throw_longjmp: __emscripten_throw_longjmp,
   /** @export */
   _gmtime_js: __gmtime_js,
   /** @export */
@@ -14917,8 +14960,6 @@ var wasmImports = {
   glVertexAttribPointer: _glVertexAttribPointer,
   /** @export */
   glViewport: _glViewport,
-  /** @export */
-  godot_audio_get_browser_mix_rate: _godot_audio_get_browser_mix_rate,
   /** @export */
   godot_audio_has_worklet: _godot_audio_has_worklet,
   /** @export */
@@ -15236,28 +15277,6 @@ var wasmImports = {
   /** @export */
   godot_webxr_update_target_frame_rate: _godot_webxr_update_target_frame_rate,
   /** @export */
-  invoke_ii,
-  /** @export */
-  invoke_iii,
-  /** @export */
-  invoke_iiii,
-  /** @export */
-  invoke_iiiii,
-  /** @export */
-  invoke_iiiiiii,
-  /** @export */
-  invoke_iiiiiiiiii,
-  /** @export */
-  invoke_v,
-  /** @export */
-  invoke_vi,
-  /** @export */
-  invoke_vii,
-  /** @export */
-  invoke_viii,
-  /** @export */
-  invoke_viiii,
-  /** @export */
   proc_exit: _proc_exit,
   /** @export */
   strftime: _strftime,
@@ -15277,7 +15296,6 @@ var _ntohs = createExportWrapper('ntohs', 1);
 var __emwebxr_on_input_event = Module['__emwebxr_on_input_event'] = createExportWrapper('_emwebxr_on_input_event', 2);
 var __emwebxr_on_simple_event = Module['__emwebxr_on_simple_event'] = createExportWrapper('_emwebxr_on_simple_event', 1);
 var ___funcs_on_exit = createExportWrapper('__funcs_on_exit', 0);
-var _setThrew = createExportWrapper('setThrew', 2);
 var _emscripten_stack_init = () => (_emscripten_stack_init = wasmExports['emscripten_stack_init'])();
 var _emscripten_stack_get_free = () => (_emscripten_stack_get_free = wasmExports['emscripten_stack_get_free'])();
 var _emscripten_stack_get_base = () => (_emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'])();
@@ -15285,127 +15303,6 @@ var _emscripten_stack_get_end = () => (_emscripten_stack_get_end = wasmExports['
 var __emscripten_stack_restore = (a0) => (__emscripten_stack_restore = wasmExports['_emscripten_stack_restore'])(a0);
 var __emscripten_stack_alloc = (a0) => (__emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'])(a0);
 var _emscripten_stack_get_current = () => (_emscripten_stack_get_current = wasmExports['emscripten_stack_get_current'])();
-
-function invoke_vi(index,a1) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)(a1);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)(a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_vii(index,a1,a2) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)(a1,a2);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiii(index,a1,a2,a3,a4) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)(a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iii(index,a1,a2) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1,a2);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_ii(index,a1) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_v(index) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)();
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiiii(index,a1,a2,a3,a4) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1,a2,a3,a4,a5,a6,a7,a8,a9);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (e !== e+0) throw e;
-    _setThrew(1, 0);
-  }
-}
 
 
 // include: postamble.js
@@ -15511,8 +15408,6 @@ var missingLibrarySymbols = [
   'makePromise',
   'idsToPromises',
   'makePromiseCallback',
-  'ExceptionInfo',
-  'findMatchingCatch',
   'Browser_asyncPrepareDataCounter',
   'FS_unlink',
   'FS_mkdirTree',
@@ -15544,12 +15439,6 @@ var unexportedSymbols = [
   'addOnPostRun',
   'addRunDependency',
   'removeRunDependency',
-  'FS_createFolder',
-  'FS_createPath',
-  'FS_createLazyFile',
-  'FS_createLink',
-  'FS_createDevice',
-  'FS_readFile',
   'out',
   'err',
   'abort',
@@ -15644,9 +15533,6 @@ var unexportedSymbols = [
   'doWritev',
   'safeSetTimeout',
   'promiseMap',
-  'uncaughtExceptionCount',
-  'exceptionLast',
-  'exceptionCaught',
   'Browser',
   'setMainLoop',
   'getPreloadedImageData__data',
@@ -15660,8 +15546,12 @@ var unexportedSymbols = [
   'FS_getMode',
   'FS_stdin_getChar_buffer',
   'FS_stdin_getChar',
+  'FS_createPath',
+  'FS_createDevice',
+  'FS_readFile',
   'FS',
   'FS_createDataFile',
+  'FS_createLazyFile',
   'MEMFS',
   'TTY',
   'PIPEFS',
@@ -15694,6 +15584,8 @@ var unexportedSymbols = [
   'webgl_enable_WEBGL_multi_draw_instanced_base_vertex_base_instance',
   'allocateUTF8',
   'allocateUTF8OnStack',
+  'print',
+  'printErr',
   'GodotWebXR',
   'GodotWebSocket',
   'GodotRTCDataChannel',
@@ -15954,6 +15846,7 @@ const Features = {
 	 */
 	getMissingFeatures: function (supportedFeatures = {}) {
 		const {
+			// Quotes are needed for the Closure compiler.
 			'threads': supportsThreads = true,
 		} = supportedFeatures;
 
@@ -16389,12 +16282,13 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 	 */
 	Config.prototype.getModuleConfig = function (loadPath, response) {
 		let r = response;
+		const gdext = this.gdextensionLibs;
 		return {
 			'print': this.onPrint,
 			'printErr': this.onPrintError,
 			'thisProgram': this.executable,
 			'noExitRuntime': false,
-			'dynamicLibraries': [`${loadPath}.side.wasm`],
+			'dynamicLibraries': [`${loadPath}.side.wasm`].concat(this.gdextensionLibs),
 			'instantiateWasm': function (imports, onSuccess) {
 				function done(result) {
 					onSuccess(result['instance'], result['module']);
@@ -16418,6 +16312,8 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 					return `${loadPath}.audio.worklet.js`;
 				} else if (path.endsWith('.js')) {
 					return `${loadPath}.js`;
+				} else if (path in gdext) {
+					return path;
 				} else if (path.endsWith('.side.wasm')) {
 					return `${loadPath}.side.wasm`;
 				} else if (path.endsWith('.wasm')) {
@@ -16643,25 +16539,19 @@ const Engine = (function () {
 					me.rtenv['initConfig'](config);
 
 					// Preload GDExtension libraries.
-					const libs = [];
 					if (me.config.gdextensionLibs.length > 0 && !me.rtenv['loadDynamicLibrary']) {
 						return Promise.reject(new Error('GDExtension libraries are not supported by this engine version. '
 							+ 'Enable "Extensions Support" for your export preset and/or build your custom template with "dlink_enabled=yes".'));
 					}
-					me.config.gdextensionLibs.forEach(function (lib) {
-						libs.push(me.rtenv['loadDynamicLibrary'](lib, { 'loadAsync': true }));
-					});
-					return Promise.all(libs).then(function () {
-						return new Promise(function (resolve, reject) {
-							preloader.preloadedFiles.forEach(function (file) {
-								me.rtenv['copyToFS'](file.path, file.buffer);
-							});
-							preloader.preloadedFiles.length = 0; // Clear memory
-							me.rtenv['callMain'](me.config.args);
-							initPromise = null;
-							me.installServiceWorker();
-							resolve();
-						});
+					return new Promise(function (resolve, reject) {
+						for (const file of preloader.preloadedFiles) {
+							me.rtenv['copyToFS'](file.path, file.buffer);
+						}
+						preloader.preloadedFiles.length = 0; // Clear memory
+						me.rtenv['callMain'](me.config.args);
+						initPromise = null;
+						me.installServiceWorker();
+						resolve();
 					});
 				});
 			},
